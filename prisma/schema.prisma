@@ -1,0 +1,355 @@
+// MIZAN v1.0 — data model (sandbox adaptation: SQLite via Prisma)
+// Production target is PostgreSQL 16 with row-level security, partitioning and SKIP LOCKED.
+// Every table is tenant-scoped; in SQLite, tenant isolation is enforced in the repository layer
+// (see src/lib/server/tenancy.ts) and documented in docs/DEVIATIONS.md + infra stubs.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── Tenancy & identity ────────────────────────────────────────────────────────
+
+model Tenant {
+  id        String @id // "default" in the sandbox; multi-tenant in production
+  name      String
+  createdAt DateTime @default(now())
+}
+
+/// Judge accounts / role switcher. Production integrates OIDC (Entra ID) —
+/// see src/lib/integrations/oidc.ts for the integration point.
+model Actor {
+  id         String  @id // "analyst-a", "team-lead", …
+  name       String
+  role       String // analyst | team_lead | ops_owner | policy_author | policy_approver | auditor | admin | compliance_lead
+  employeeId String? // links the actor to an employee for the conflict-of-interest guard
+  active     Boolean @default(true)
+}
+
+// ── Master data (normalised from employees.csv) ──────────────────────────────
+
+model Employee {
+  employeeId   String  @id
+  gradeRaw     String?
+  gradeOrdinal Int?
+  department   String?
+  location     String?
+  managerId    String?
+  hireDate     String?
+  exitDate     String?
+  statusRaw    String?
+  status       String // ACTIVE | EXITED | SUSPENDED | ON_LEAVE | UNKNOWN
+  rolesJson    String  @default("[]")
+  spellsJson   String  @default("[]")
+  attributesJson String @default("{}")
+  datasetId    String
+}
+
+model Txn {
+  rowId             String  @id // txnId, or txnId#n when the ID repeats with different content
+  txnId             String
+  type              String // canonical code or UNKNOWN
+  typeRaw           String
+  employeeId        String
+  gradeRaw          String?
+  department        String?
+  location          String?
+  amountFils        Int?
+  currency          String?
+  amountSemantics   String  @default("unknown") // delta | new_total | unknown
+  effectiveDate     String?
+  submittedAt       String?
+  submittedPrecision String?
+  requesterId       String?
+  approvalsJson     String? // null = column absent; [] = no approvals
+  documentsJson     String? // null = column absent; [] = none attached
+  reversalOf        String?
+  freeTextJson      String  @default("{}")
+  passthroughJson   String  @default("{}")
+  dqJson            String  @default("[]")
+  caveatsJson       String  @default("[]")
+  sourceJson        String  @default("{}")
+  datasetId         String
+  rowNumber         Int
+
+  @@index([employeeId])
+  @@index([datasetId])
+}
+
+model Dataset {
+  id                  String   @id
+  kind                String // transactions | employees | policy | finding_format
+  sha256              String
+  rows                Int
+  issuesJson          String   @default("[]")
+  mappingProfileJson  String?
+  syntheticTag        String   @default("SYNTHETIC-GENERATED")
+  createdAt           DateTime @default(now())
+
+  @@unique([kind, sha256])
+}
+
+// ── Rules ────────────────────────────────────────────────────────────────────
+
+model Rule {
+  id                 String  @id // "R04"
+  version            String  @default("1.0.0")
+  family             String
+  title              String
+  verbatimText       String
+  anchor             String
+  textSha256         String
+  status             String  @default("active") // draft|tested|backtested|approved|shadow|active|retired
+  specJson           String // RuleSpec canonical JSON
+  interpretationJson String // InterpretationRecord canonical JSON
+  baseSeverity       String
+  modifiersJson      String  @default("[]")
+  routingProcess     String?
+  actionTemplate     String?
+  effectiveFrom      String
+  author             String  @default("policy-owner")
+  updatedAt          DateTime @updatedAt
+}
+
+model RuleApproval {
+  id        String   @id
+  ruleId    String
+  version   String
+  approver  String
+  decision  String // approved | rejected
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([ruleId, version, approver])
+}
+
+model RuleDraft {
+  id              String   @id
+  plainEnglish    String
+  specJson        String?
+  ambiguitiesJson String?
+  status          String   @default("draft") // draft|tested|backtested|submitted|approved|shadow|active|rejected
+  author          String
+  backtestJson    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ── Runs ─────────────────────────────────────────────────────────────────────
+
+model Run {
+  id             String   @id
+  kind           String   @default("standard") // standard | shadow | backtest
+  status         String // QUEUED|RUNNING|FINALIZING|COMPLETED|COMPLETED_WITH_HOLDS|COMPLETED_WITH_DQ|FAILED|CANCELLED
+  engineVersion  String
+  packVersion    String
+  packHash       String
+  calendarHash   String
+  routingHash    String
+  gradeLadderHash String
+  synonymsHash   String
+  configHash     String
+  flagsHash      String
+  asOf           String
+  inputsJson     String // [{datasetId,kind,sha256,rows}]
+  countsJson     String // census counts
+  perRuleJson    String   @default("{}") // per-rule census for the coverage matrix
+  outputHash     String
+  holdsJson      String   @default("[]")
+  stagesJson     String   @default("[]")
+  startedAt      DateTime @default(now())
+  finishedAt     DateTime?
+}
+
+// ── Exceptions ───────────────────────────────────────────────────────────────
+
+model Exception {
+  exceptionKey      String  @id
+  displayId         String
+  tenantId          String  @default("default")
+  rowId             String
+  txnId             String
+  ruleId            String
+  clauseId          String
+  ruleVersion       String
+  family            String
+  severity          String // CRITICAL|HIGH|MEDIUM|LOW
+  severityRationale String
+  ownerTeam         String
+  ownerUserId       String?
+  watchersJson      String  @default("[]")
+  routingRationale  String
+  routingTableVersion String
+  actionId          String
+  actionEn          String
+  actionAr          String
+  headlineEn        String
+  headlineAr        String
+  explanationEn     String
+  explanationAr     String
+  status            String // NEW|TRIAGED|ASSIGNED|IN_PROGRESS|PENDING_VERIFICATION|CLOSED|DISMISSED|ACCEPTED_RISK|DUPLICATE|REOPENED
+  version           Int     @default(1)
+  groupKey          String
+  ackDueAt          String?
+  resolveDueAt      String?
+  heldReason        String?
+  noLongerDetected  Boolean @default(false)
+  firstRunId        String
+  lastRunId         String
+  evidenceJson      String
+  evidenceHash      String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([status, severity])
+  @@index([ruleId])
+  @@index([ownerTeam])
+  @@index([groupKey])
+}
+
+model Observation {
+  id           String   @id
+  exceptionKey String
+  runId        String
+  ruleVersion  String
+  evidenceHash String
+  observedAt   DateTime @default(now())
+
+  @@index([exceptionKey])
+}
+
+model Decision {
+  id             String   @id
+  exceptionKey   String
+  command        String
+  actorId        String
+  reasonCategory String?
+  reasonText     String?
+  sourceRef      String?
+  expiry         String?
+  canonicalKey   String?
+  countersignedBy String?
+  idempotencyKey String
+  auditHash      String @default("")
+  createdAt      DateTime @default(now())
+
+  @@index([exceptionKey])
+}
+
+model Comment {
+  id           String   @id
+  exceptionKey String
+  actorId      String
+  text         String
+  createdAt    DateTime @default(now())
+}
+
+// ── Audit (append-only hash chain; UPDATE/DELETE revoked in production) ──────
+
+model AuditEvent {
+  seq         Int      @id @default(autoincrement())
+  tenantId    String   @default("default")
+  at          String // ISO instant, UTC
+  actor       String // user id or system:<component>
+  type        String
+  entity      String
+  entityId    String
+  payloadJson String // canonical JSON, redacted
+  prevHash    String
+  hash        String
+
+  @@index([type])
+  @@index([entityId])
+}
+
+// ── Reliability primitives ───────────────────────────────────────────────────
+
+model Outbox {
+  id          String   @id
+  type        String // notification.email | notification.webhook | mode.changed | …
+  payloadJson String
+  status      String   @default("pending") // pending | sent | failed | dead
+  attempts    Int      @default(0)
+  lastError   String?
+  createdAt   DateTime @default(now())
+  sentAt      DateTime?
+
+  @@index([status])
+}
+
+model Inbox {
+  id         String   @id // eventId of the delivered message
+  receivedAt DateTime @default(now())
+
+  @@unique([id])
+}
+
+model IdempotencyKey {
+  key          String   @id
+  route        String
+  bodyHash     String
+  responseJson String
+  createdAt    DateTime @default(now())
+}
+
+model DlqItem {
+  id          String   @id
+  jobKey      String
+  queue       String
+  payloadJson String
+  error       String
+  attempts    Int      @default(0)
+  createdAt   DateTime @default(now())
+}
+
+// ── Operations ───────────────────────────────────────────────────────────────
+
+model FeatureFlag {
+  key       String   @id
+  value     String
+  updatedBy String
+  reason    String
+  updatedAt DateTime @updatedAt
+}
+
+model SystemMode {
+  tenantId    String @id
+  mode        String @default("M0") // M0..M5
+  reason      String?
+  signalsJson String @default("[]")
+  operator    String?
+  since       DateTime @default(now())
+}
+
+model PatternAlert {
+  id          String   @id // P03-2026W07-0001
+  patternId   String // P01..P10
+  title       String
+  neutralText String
+  detailJson  String
+  status      String   @default("open") // open | monitored | promoted | dismissed
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  createdAt   DateTime @default(now())
+}
+
+model EvidencePack {
+  id           String   @id
+  scope        String // per-exception key or per-run id
+  manifestJson String
+  filesJson    String
+  createdAt    DateTime @default(now())
+}
+
+model ProductEvent {
+  id       String   @id
+  event    String
+  actorHash String
+  role     String
+  at       DateTime @default(now())
+  propsJson String  @default("{}")
+}

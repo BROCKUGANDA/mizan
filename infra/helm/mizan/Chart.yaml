@@ -1,0 +1,12 @@
+apiVersion: v2
+name: mizan
+description: MIZAN — continuous HR policy assurance (on-premises / air-gapped install)
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - compliance
+  - hr
+  - audit
+maintainers:
+  - name: MIZAN team

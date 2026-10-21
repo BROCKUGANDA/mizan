@@ -1,0 +1,138 @@
+# MIZAN v1.0 — deployment boilerplate (NOT runnable in the sandbox)
+#
+# This compose file is the one-command start for the target environment
+# (red line: `docker compose up` reaches a seeded, healthy app offline).
+# In the cloud sandbox, docker is unavailable — the Next.js dev server
+# (bun run dev) plays the web+api+worker roles against SQLite.
+# See docs/DEVIATIONS.md for the full mapping.
+#
+# Services mirror §38: web, api, worker-warm, worker-cold, postgres, valkey,
+# minio, keycloak (OIDC), otel-collector; profiles: ai-local, observability.
+
+version: "3.9"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+      target: web
+    environment:
+      - MIZAN_PROFILE=${MIZAN_PROFILE:-judge}
+      - MIZAN_NETWORK=${MIZAN_NETWORK:-airgapped}
+      - DATABASE_URL=postgres://mizan:${POSTGRES_PASSWORD}@postgres:5432/mizan
+      - VALKEY_URL=valkey:6379
+      - S3_ENDPOINT=http://minio:9000
+      - S3_BUCKET=mizan
+      - OIDC_ISSUER=http://keycloak:8080/realms/mizan
+      - AI_MODE=${AI_MODE:-none}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+      - TZ=Asia/Dubai
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres: { condition: service_healthy }
+      valkey: { condition: service_started }
+      minio: { condition: service_started }
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+      target: api
+    environment:
+      - MIZAN_PROFILE=${MIZAN_PROFILE:-judge}
+      - DATABASE_URL=postgres://mizan:${POSTGRES_PASSWORD}@postgres:5432/mizan
+      - VALKEY_URL=valkey:6379
+      - TZ=Asia/Dubai
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  worker-warm:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+      target: worker
+    command: ["node", "dist/worker.js", "--pool=warm"]
+    environment:
+      - DATABASE_URL=postgres://mizan:${POSTGRES_PASSWORD}@postgres:5432/mizan
+      - VALKEY_URL=valkey:6379
+      - TZ=Asia/Dubai
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  worker-cold:
+    build:
+      context: .
+      dockerfile: infra/docker/Dockerfile
+      target: worker
+    command: ["node", "dist/worker.js", "--pool=cold"]
+    environment:
+      - DATABASE_URL=postgres://mizan:${POSTGRES_PASSWORD}@postgres:5432/mizan
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=mizan
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-mizan-dev}
+      - POSTGRES_DB=mizan
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Production: synchronous standby + witness (Patroni) — see infra/helm
+    command: >
+      postgres -c wal_level=replica -c max_wal_senders=5 -c max_replication_slots=5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mizan"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    # Non-authoritative cache; the app is correct with it switched off (chaos test)
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=mizan
+      - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD:-mizan-dev}
+    volumes:
+      - minio-data:/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: start-dev --realm=mizan
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_PASSWORD:-admin-dev}
+    profiles: ["auth"]
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    profiles: ["observability"]
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: ["observability"]
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: ["observability"]
+
+  ai-local:
+    image: vllm/vllm-openai:latest
+    profiles: ["ai-local"]
+    environment:
+      - MODEL=${AI_LOCAL_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+
+volumes:
+  pgdata:
+  minio-data:

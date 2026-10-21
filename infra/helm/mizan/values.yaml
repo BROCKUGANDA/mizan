@@ -1,0 +1,81 @@
+# MIZAN Helm values (boilerplate for on-premises / air-gapped installs).
+# Values documented per §38; images come from the internal registry when air-gapped,
+# with cosign verification and an SBOM per image (supply-chain red line).
+
+replicaCount:
+  web: 2
+  api: 2
+  workerWarm: 2
+  workerCold: 2
+
+image:
+  registry: registry.internal.emirates.local
+  repository: mizan
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  signature:
+    verify: true          # cosign verify before scheduling
+    sbom: required        # SBOM ships with each image
+
+env:
+  MIZAN_PROFILE: production
+  MIZAN_NETWORK: airgapped   # no outbound internet; fonts/calendars bundled
+  AI_MODE: none              # or "local" with AI_LOCAL_URL pointing at the GPU node
+  TZ: Asia/Dubai
+
+database:
+  # Single-writer Postgres with a synchronous standby and a witness (§24).
+  # Patroni manages failover; RPO 0, RTO ≤ 5 min, fencing tokens (FS-11).
+  external:
+    host: postgres-primary.internal
+    readReplica:
+      host: postgres-replica.internal
+  ssl: require
+  backup:
+    nightly: true
+    pitr: true
+    weeklyRestoreTest: true   # FS-23: restore proof into a scratch database
+
+valkey:
+  url: valkey.internal:6379
+  nonAuthoritative: true      # chaos-tested: the app is correct with the cache off
+
+objectStorage:
+  endpoint: http://minio.internal:9000
+  bucket: mizan
+  objectLock: WORM            # evidence packs and audit anchors are immutable
+
+oidc:
+  issuer: https://login.microsoftonline.com/<tenant>/v2.0
+  clientId: mizan
+  groupsClaim: groups
+  roleMapping:
+    SG-MIZAN-ADMIN: admin
+    SG-MIZAN-COMPLIANCE-LEAD: compliance_lead
+    SG-MIZAN-TEAM-LEAD: team_lead
+    SG-MIZAN-AUDIT: auditor
+
+security:
+  networkPolicy: default-deny
+  tls:
+    minVersion: "1.2"
+  secrets:
+    vault: true               # secrets come from a vault; never in the repo
+  headers:
+    csp: "default-src 'self'"
+    hsts: true
+    frameAncestors: none
+
+monitoring:
+  otel:
+    endpoint: http://otel-collector.internal:4318
+  slo:
+    hotPathP95Ms: 300
+    checkP95Ms: 150
+  burnRateAlerts: [14.4, 6]
+
+dr:
+  twoSite: true
+  healthBasedRouting: true
+  witness: true
+  runbooks: [RB-01, RB-02, RB-03, RB-04, RB-05, RB-06, RB-07, RB-08]

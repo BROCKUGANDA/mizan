@@ -3,18 +3,21 @@
 /**
  * MIZAN shell: the only user-visible route. All views are client-side inside
  * this page (sandbox constraint). Top bar with mode chip, judge ribbon, actor
- * switcher, language/theme toggles, notifications, command palette (⌘K),
+ * switcher, language/theme/accent toggles, notifications, command palette (⌘K),
  * keyboard shortcuts (J/K/?), judge Reset, and mode banners.
+ * Emirates-vibe dressing: Sadu weave strips, gold-ruled brand mark, animated
+ * nav underline, gentle view transitions (reduced-motion aware).
  */
 
 import { useEffect, useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Bell, Command, HelpCircle, Languages, Moon, RotateCcw, Sun, Monitor } from "lucide-react";
+import { motion, useReducedMotion, AnimatePresence } from "framer-motion";
+import { Bell, Command, HelpCircle, Languages, Moon, RotateCcw, Sun, Monitor, Palette } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { CommandPalette } from "@/components/mizan/command-palette";
 import { NotificationPanel } from "@/components/mizan/notification-panel";
 import { ShortcutsDialog } from "@/components/mizan/shortcuts-dialog";
@@ -22,7 +25,7 @@ import { ExceptionDrawer } from "@/components/mizan/views/exception-drawer";
 import { ModeChip, ModeBanner, JudgeRibbon } from "@/components/mizan/primitives";
 import { useAppStore, api, v1, type ViewKey } from "@/lib/client/store";
 import { useI18n, I18nProvider } from "@/lib/i18n/use-i18n";
-import { useMizanTheme } from "@/components/mizan/theme-provider";
+import { useMizanTheme, ACCENTS, type Accent } from "@/components/mizan/theme-provider";
 
 interface SystemState {
   mode: { current: string; label: string; labelAr: string; banner: string; bannerAr: string; reason: string | null; operator: string | null };
@@ -38,6 +41,7 @@ const NAV: { key: ViewKey; labelKey: string }[] = [
   { key: "rules", labelKey: "nav.rules" },
   { key: "patterns", labelKey: "nav.patterns" },
   { key: "audit", labelKey: "nav.audit" },
+  { key: "integrations", labelKey: "nav.integrations" },
   { key: "settings", labelKey: "nav.settings" },
 ];
 
@@ -56,9 +60,10 @@ export default function Home() {
 function Shell() {
   const { t, locale, setLocale, iso } = useI18n();
   const { view, setView, actor, setActor, setSelectedException, commandOpen, setCommandOpen, shortcutsOpen, setShortcutsOpen, notificationsOpen, setNotificationsOpen } = useAppStore();
-  const { mode: themeMode, setMode: setThemeMode } = useMizanTheme();
+  const { mode: themeMode, setMode: setThemeMode, accent, setAccent } = useMizanTheme();
   const queryClient_ = useQueryClient();
   const [resetting, setResetting] = useState(false);
+  const reduceMotion = useReducedMotion();
 
   const { data: system } = useQuery<SystemState>({
     queryKey: ["system-state", actor],
@@ -117,10 +122,12 @@ function Shell() {
         {locale === "ar" ? "تخطَّ إلى المحتوى" : "Skip to content"}
       </a>
 
+      <div className="sadu-strip" aria-hidden />
+
       <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
         <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
           <div className="flex shrink-0 items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary font-bold text-primary-foreground" aria-hidden>
+            <div className="brand-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-md font-bold text-primary-foreground" aria-hidden>
               م
             </div>
             <div className="leading-tight">
@@ -144,7 +151,8 @@ function Shell() {
                 key={n.key}
                 onClick={() => setView(n.key)}
                 aria-current={view === n.key ? "page" : undefined}
-                className={`rounded-md px-3 py-1.5 text-sm transition-colors duration-200 ${
+                data-active={view === n.key}
+                className={`nav-underline rounded-md px-3 py-1.5 text-sm transition-colors duration-200 ${
                   view === n.key ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                 }`}
               >
@@ -175,12 +183,35 @@ function Shell() {
                   {themeMode === "dark" ? <Moon className="h-4 w-4" /> : themeMode === "projector" ? <Monitor className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {([["light", "Light"], ["dark", "Dark"], ["system", "System"], ["projector", "Projector (1280×720)"]] as const).map(([m, label]) => (
-                  <DropdownMenuItem key={m} onClick={() => setThemeMode(m)} className={themeMode === m ? "bg-accent" : ""}>
-                    {label}
-                  </DropdownMenuItem>
-                ))}
+              <DropdownMenuContent align="end" className="min-w-52">
+                <DropdownMenuItem onClick={() => setThemeMode("light")} className={themeMode === "light" ? "bg-accent" : ""}>
+                  {t("theme.light")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setThemeMode("dark")} className={themeMode === "dark" ? "bg-accent" : ""}>
+                  {t("theme.dark")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setThemeMode("system")} className={themeMode === "system" ? "bg-accent" : ""}>
+                  {t("theme.system")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setThemeMode("projector")} className={themeMode === "projector" ? "bg-accent" : ""}>
+                  {t("theme.projector")}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Palette className="me-2 h-4 w-4 text-gold" aria-hidden />
+                    {t("theme.accent")}
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent className="min-w-48">
+                    {ACCENTS.map((a) => (
+                      <DropdownMenuItem key={a} onClick={() => setAccent(a as Accent)} className={accent === a ? "bg-accent" : ""}>
+                        <span aria-hidden className="me-2 inline-block h-3.5 w-3.5 rounded-full border border-border" data-accent-preview={a} />
+                        {t(`theme.${a}`)}
+                        {accent === a ? <span className="ms-auto text-xs text-ok" aria-hidden>✓</span> : null}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
               </DropdownMenuContent>
             </DropdownMenu>
             <NotificationPanel open={notificationsOpen} onOpenChange={setNotificationsOpen} />
@@ -233,17 +264,31 @@ function Shell() {
       />
 
       <main id="main" className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
-        {view === "overview" ? <OverviewLazy /> : null}
-        {view === "queue" ? <QueueLazy /> : null}
-        {view === "runs" ? <RunsLazy /> : null}
-        {view === "rules" ? <RulesLazy /> : null}
-        {view === "patterns" ? <PatternsLazy /> : null}
-        {view === "audit" ? <AuditLazy /> : null}
-        {view === "settings" ? <SettingsLazy /> : null}
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.div
+            key={view}
+            initial={reduceMotion ? undefined : { opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+          >
+            {view === "overview" ? <OverviewView /> : null}
+            {view === "queue" ? <QueueView /> : null}
+            {view === "runs" ? <RunsView /> : null}
+            {view === "rules" ? <RulesView /> : null}
+            {view === "patterns" ? <PatternsView /> : null}
+            {view === "audit" ? <AuditView /> : null}
+            {view === "integrations" ? <IntegrationsView /> : null}
+            {view === "settings" ? <SettingsView /> : null}
+          </motion.div>
+        </AnimatePresence>
       </main>
 
-      <footer className="mt-auto border-t bg-card py-3 text-center text-xs text-muted-foreground pb-[max(0.75rem,env(safe-area-inset-bottom))]">
-        {iso("MIZAN v1.0 · engine-1.0.0 · pack emirates-hr-1.0.0 · synthetic data only · the engine decides, the model explains")}
+      <footer className="mt-auto border-t bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+        <div className="sadu-strip-fine" aria-hidden />
+        <p className="py-3 text-center text-xs text-muted-foreground">
+          {iso("MIZAN v1.0 · engine-1.0.0 · pack emirates-hr-1.0.0 · synthetic data only · the engine decides, the model explains")}
+        </p>
       </footer>
 
       <ExceptionDrawer />
@@ -254,22 +299,15 @@ function Shell() {
   );
 }
 
-/* Lazy view imports keep the shell readable; all views live in components/mizan/views. */
+/* View imports keep the shell readable; all views live in components/mizan/views. */
 import OverviewView from "@/components/mizan/views/overview-view";
 import QueueView from "@/components/mizan/views/queue-view";
 import RunsView from "@/components/mizan/views/runs-view";
 import RulesView from "@/components/mizan/views/rules-view";
 import PatternsView from "@/components/mizan/views/patterns-view";
 import AuditView from "@/components/mizan/views/audit-view";
+import IntegrationsView from "@/components/mizan/views/integrations-view";
 import SettingsView from "@/components/mizan/views/settings-view";
-
-function OverviewLazy() { return <OverviewView />; }
-function QueueLazy() { return <QueueView />; }
-function RunsLazy() { return <RunsView />; }
-function RulesLazy() { return <RulesView />; }
-function PatternsLazy() { return <PatternsView />; }
-function AuditLazy() { return <AuditView />; }
-function SettingsLazy() { return <SettingsView />; }
 
 function ResetSpinner({ open }: { open: boolean }) {
   const { t } = useI18n();

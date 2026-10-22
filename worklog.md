@@ -116,3 +116,20 @@ Work Log:
 
 Stage Summary:
 - All red lines pass in sandbox scope. Final state: seed 42 pack → 15,915 checks, 52 findings, 7 DQ exceptions, outputHash 39fb4ed3cecd0944 (deterministic across seed/server/CLI), FS-20 5/5, readiness 80/100.
+---
+Task ID: 4
+Agent: orchestrator (Z.ai Code)
+Task: UI/UX polish + hardening + Emirates-vibe themes + integration stubs (live systems / real data / auto write-back as documented seams)
+
+Work Log:
+- Integrations (stubs as seams): src/lib/integrations/{hrms-adapter,finance-adapter,writeback-adapter,registry}.ts — HrmsStubAdapter/LiveAdapter (SuccessFactors/Oracle HCM seam, least-attributes, sourceHash), ErpStubAdapter/LiveAdapter (integer fils, watermark cursoring seam), writeback adapter that CANNOT mutate (proposals only, proposer≠verifier enforced in code, env MIZAN_WRITEBACK=human_approved_api still human-gated), registry with 7 entries (hrms/finance/writeback/identity/notify/storage/cache) incl. OIDC/notify/cache seams from stubs.ts, env-key presence check (secrets masked). API: GET /api/v1/integrations + POST /api/v1/integrations/[id]/dry-run (role-gated compliance_lead/team_lead/auditor/admin, audited as integration.dry_run, returns payload shape+sample). docs/INTEGRATIONS.md (swap runbook + invariants).
+- New Integrations view (nav between Audit and Settings, ViewKey extended): synthetic-only banner, write-back spotlight ("changing transactions automatically is impossible by design"), 6 adapter cards with production target/guardrails (EN+AR)/config checklist/health/dry-run with sample JSON viewer; analyst role gets 403 error state, compliance lead succeeds; verified dry-run audit events in hash chain (seq 35-40, chain ok).
+- Emirates-vibe themes: 6 accent packs (emirates/oasis/pearl/dawn/majlis/saffron) as data-accent on <html>, light+dark variants, severity colors untouched; Sadu CSS motifs (sadu-strip header top edge, sadu-strip-fine footer, sadu-band empty-state ornament, gold-rule, brand-mark gradient+gold ring); animated nav-underline (RTL-safe logical props); accent preview dots in theme menu + command palette (theme group added); persisted via localStorage mizan-accent.
+- UI/UX polish: AnimatePresence view transitions (0.2s fade/slide, useReducedMotion honored), EmptyState gets sadu-band, footer sadu-strip-fine + safe-area, error.tsx global boundary (digest + retry, sadu dressing), i18n keys for integrations + themes (EN/AR).
+- Hardening: next.config security headers (CSP default-src self, HSTS, X-Frame-Options DENY, nosniff, Referrer-Policy, Permissions-Policy, poweredByHeader off) — verified via curl; rate limiting MZ-RATE-429 in withApiRoute via lib/server/rate-limit.ts (token bucket 300 cap/10 rps per actor, dry-run 10/min tighter bucket, sweep, verified 429 after 10 dry-runs).
+- Bug found+fixed: next-themes ThemeProvider was never mounted (pre-existing) — setTheme was a no-op so dark mode silently did nothing; added MizanThemeProviders wrapper in layout. Bug found+fixed: accent packs overrode --accent/background in dark mode → invisible active-nav text (light on light); scoped light packs to :not(.dark).
+- Verified E2E (agent-browser): overview/queue/drawer render, oasis+saffron+dark apply live with correct contrast, Arabic RTL mirrors the whole shell incl. integrations view (AR note localization added), dry-run 403 for analyst / success for compliance lead, queue+drawer regression pass after page.tsx rewrite, console clean, lint+tsc clean.
+
+Stage Summary:
+- New files: integrations adapters/registry, 2 API routes, integrations-view.tsx, error.tsx, docs/INTEGRATIONS.md; Modified: globals.css (accent packs+Sadu+gold tokens), theme-provider (accents+NextThemes wrapper), layout.tsx, page.tsx (nav/footer/transitions), store (ViewKey), i18n (34 keys), command-palette (theme group), primitives (EmptyState), server/api (rate limit), next.config (headers).
+- Red lines upheld: synthetic-only (stubs refuse live without env+URL), human-only decisions (write-back renders proposals, proposer≠verifier in code), every dry-run audited.

@@ -112,7 +112,8 @@ export function ModeBanner({ mode, banner, reason, operator }: { mode: string; b
 
 export function EmptyState({ title, hint, icon }: { title: string; hint?: string; icon?: React.ReactNode }) {
   return (
-    <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed p-8 text-center" role="status">
+    <div className="flex min-h-48 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-8 text-center" role="status">
+      <div className="sadu-band w-24" aria-hidden />
       <div className="text-muted-foreground">{icon ?? <CircleMinus className="h-8 w-8" aria-hidden />}</div>
       <p className="text-sm font-medium">{title}</p>
       {hint ? <p className="max-w-sm text-xs text-muted-foreground">{hint}</p> : null}

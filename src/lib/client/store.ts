@@ -7,7 +7,7 @@
 
 import { create } from "zustand";
 
-export type ViewKey = "overview" | "queue" | "runs" | "rules" | "patterns" | "audit" | "settings";
+export type ViewKey = "overview" | "queue" | "runs" | "rules" | "patterns" | "audit" | "integrations" | "settings";
 
 export interface AppState {
   view: ViewKey;

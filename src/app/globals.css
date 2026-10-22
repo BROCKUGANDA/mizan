@@ -60,6 +60,8 @@
   --color-brand-deep: var(--brand-deep);
   --color-ok: var(--ok);
   --color-hold: var(--hold);
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
 
   /* Motion tokens (§30) */
   --duration-instant: 90ms;
@@ -115,6 +117,8 @@
   --brand-deep: oklch(0.4 0.13 30);
   --ok: oklch(0.6 0.11 145);
   --hold: oklch(0.66 0.13 300);            /* plum for holds */
+  --gold: oklch(0.62 0.11 75);             /* brass/gold accent (Emirates vibe) */
+  --gold-soft: oklch(0.87 0.06 85);
 
   /* IBM Plex preferred stack (self-hosting is an integration point; see docs/DEVIATIONS.md) */
   --font-stack-sans: "IBM Plex Sans", "IBM Plex Sans Arabic", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -164,6 +168,116 @@
   --brand-deep: oklch(0.74 0.15 34);
   --ok: oklch(0.7 0.11 150);
   --hold: oklch(0.7 0.12 300);
+  --gold: oklch(0.74 0.11 80);
+  --gold-soft: oklch(0.45 0.05 80);
+}
+
+/* ─── Accent packs (Emirates vibe, §28 adaptation) ─────────────────────────
+ * data-accent on <html> swaps the brand family without touching neutrals or
+ * severity colours. Every pack keeps WCAG contrast (4.5:1 text, 3:1 UI) in
+ * both light and dark. Selected in the header theme menu, persisted locally.
+ */
+
+/* Oasis — palm green + gold (Al Ain / majlis gardens) */
+[data-accent="oasis"]:not(.dark) {
+  --primary: oklch(0.46 0.11 155);
+  --ring: oklch(0.46 0.11 155);
+  --brand: oklch(0.46 0.11 155);
+  --brand-deep: oklch(0.38 0.1 155);
+  --chart-1: oklch(0.46 0.11 155);
+  --sidebar-primary: oklch(0.46 0.11 155);
+  --accent: oklch(0.94 0.02 140);
+}
+.dark[data-accent="oasis"] {
+  --primary: oklch(0.7 0.12 155);
+  --ring: oklch(0.7 0.12 155);
+  --brand: oklch(0.7 0.12 155);
+  --brand-deep: oklch(0.76 0.12 155);
+  --chart-1: oklch(0.7 0.12 155);
+  --sidebar-primary: oklch(0.7 0.12 155);
+}
+
+/* Pearl — champagne neutrals + bronze-gold (Gulf pearl diving heritage) */
+[data-accent="pearl"]:not(.dark) {
+  --primary: oklch(0.44 0.07 70);
+  --ring: oklch(0.44 0.07 70);
+  --brand: oklch(0.44 0.07 70);
+  --brand-deep: oklch(0.36 0.06 70);
+  --chart-1: oklch(0.44 0.07 70);
+  --sidebar-primary: oklch(0.44 0.07 70);
+  --background: oklch(0.98 0.008 90);
+  --secondary: oklch(0.955 0.015 88);
+  --muted: oklch(0.955 0.015 88);
+  --accent: oklch(0.94 0.025 88);
+}
+.dark[data-accent="pearl"] {
+  --primary: oklch(0.72 0.08 75);
+  --ring: oklch(0.72 0.08 75);
+  --brand: oklch(0.72 0.08 75);
+  --brand-deep: oklch(0.78 0.08 75);
+  --chart-1: oklch(0.72 0.08 75);
+  --sidebar-primary: oklch(0.72 0.08 75);
+}
+
+/* Desert Dawn — terracotta + saffron (first light over the dunes) */
+[data-accent="dawn"]:not(.dark) {
+  --primary: oklch(0.52 0.15 45);
+  --ring: oklch(0.52 0.15 45);
+  --brand: oklch(0.52 0.15 45);
+  --brand-deep: oklch(0.44 0.14 45);
+  --chart-1: oklch(0.52 0.15 45);
+  --chart-2: oklch(0.78 0.13 85);
+  --sidebar-primary: oklch(0.52 0.15 45);
+  --accent: oklch(0.94 0.03 65);
+  --gold: oklch(0.66 0.13 70);
+}
+.dark[data-accent="dawn"] {
+  --primary: oklch(0.7 0.14 48);
+  --ring: oklch(0.7 0.14 48);
+  --brand: oklch(0.7 0.14 48);
+  --brand-deep: oklch(0.76 0.14 48);
+  --chart-1: oklch(0.7 0.14 48);
+  --chart-2: oklch(0.8 0.12 85);
+}
+
+/* Majlis — mahogany + brass (dark-wood council room warmth) */
+[data-accent="majlis"]:not(.dark) {
+  --primary: oklch(0.38 0.08 40);
+  --ring: oklch(0.38 0.08 40);
+  --brand: oklch(0.38 0.08 40);
+  --brand-deep: oklch(0.3 0.07 40);
+  --chart-1: oklch(0.38 0.08 40);
+  --sidebar-primary: oklch(0.38 0.08 40);
+  --accent: oklch(0.93 0.02 55);
+  --gold: oklch(0.58 0.1 68);
+}
+.dark[data-accent="majlis"] {
+  --primary: oklch(0.64 0.09 42);
+  --ring: oklch(0.64 0.09 42);
+  --brand: oklch(0.64 0.09 42);
+  --brand-deep: oklch(0.7 0.09 42);
+  --chart-1: oklch(0.64 0.09 42);
+}
+
+/* Saffron — warm spice + amber (souq spice market) */
+[data-accent="saffron"]:not(.dark) {
+  --primary: oklch(0.55 0.14 60);
+  --ring: oklch(0.55 0.14 60);
+  --brand: oklch(0.55 0.14 60);
+  --brand-deep: oklch(0.47 0.13 60);
+  --chart-1: oklch(0.55 0.14 60);
+  --chart-2: oklch(0.74 0.13 80);
+  --sidebar-primary: oklch(0.55 0.14 60);
+  --accent: oklch(0.94 0.035 75);
+  --gold: oklch(0.68 0.12 78);
+}
+.dark[data-accent="saffron"] {
+  --primary: oklch(0.73 0.13 62);
+  --ring: oklch(0.73 0.13 62);
+  --brand: oklch(0.73 0.13 62);
+  --brand-deep: oklch(0.79 0.13 62);
+  --chart-1: oklch(0.73 0.13 62);
+  --chart-2: oklch(0.8 0.12 80);
 }
 
 /* Projector theme (§15/§31, EC-P02): larger text, higher contrast at 1280×720 */
@@ -220,3 +334,84 @@
 .hatch-suppressed {
   background-image: repeating-linear-gradient(45deg, transparent, transparent 4px, var(--border) 4px, var(--border) 6px);
 }
+
+/* ─── Sadu weaving motif (CSS-only, tokens only) ────────────────────────────
+ * Emirati Sadu weaving = rhythmic geometric bands. Rendered with repeating
+ * gradients from brand/gold tokens so it re-themes with the accent pack.
+ * Used as thin strips (header top edge, footer) and a header ornament.
+ */
+.sadu-strip {
+  height: 6px;
+  background-image:
+    repeating-linear-gradient(90deg,
+      var(--brand) 0 14px,
+      var(--gold-soft) 14px 20px,
+      var(--brand-deep) 20px 30px,
+      var(--gold) 30px 36px);
+  opacity: 0.9;
+}
+.sadu-strip-fine {
+  height: 3px;
+  background-image:
+    repeating-linear-gradient(45deg,
+      var(--gold) 0 6px,
+      transparent 6px 12px,
+      var(--brand) 12px 16px,
+      transparent 16px 24px);
+  opacity: 0.75;
+}
+/* Diamond band for empty states / spotlight cards */
+.sadu-band {
+  height: 10px;
+  background-image:
+    repeating-linear-gradient(45deg,
+      transparent 0 5px,
+      var(--gold-soft) 5px 7px,
+      transparent 7px 12px),
+    repeating-linear-gradient(-45deg,
+      transparent 0 5px,
+      var(--gold-soft) 5px 7px,
+      transparent 7px 12px),
+    linear-gradient(90deg, var(--brand), var(--brand-deep));
+  border-radius: 2px;
+}
+
+/* Gold gradient rule under section titles */
+.gold-rule {
+  height: 2px;
+  border: none;
+  background: linear-gradient(90deg, var(--gold), var(--gold-soft) 60%, transparent);
+}
+
+/* Brand mark: brand→deep gradient with a gold inner ring */
+.brand-mark {
+  background: linear-gradient(135deg, var(--brand), var(--brand-deep));
+  box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--gold) 65%, transparent);
+}
+
+/* Animated nav underline (mirrors in RTL via logical props + transform) */
+.nav-underline {
+  position: relative;
+}
+.nav-underline::after {
+  content: "";
+  position: absolute;
+  inset-inline: 12px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: linear-gradient(90deg, var(--brand), var(--gold));
+  transform: scaleX(0);
+  transition: transform var(--duration-base) ease;
+}
+.nav-underline[data-active="true"]::after { transform: scaleX(1); }
+.nav-underline:hover::after { transform: scaleX(1); opacity: 0.55; }
+
+/* Accent preview dots (command palette / theme menu): each dot re-declares the
+ * brand pair of its pack so swatches preview without touching <html>. */
+[data-accent-preview="emirates"] { background: linear-gradient(135deg, oklch(0.48 0.14 30), oklch(0.4 0.13 30)); }
+[data-accent-preview="oasis"]    { background: linear-gradient(135deg, oklch(0.46 0.11 155), oklch(0.38 0.1 155)); }
+[data-accent-preview="pearl"]    { background: linear-gradient(135deg, oklch(0.72 0.08 75), oklch(0.44 0.07 70)); }
+[data-accent-preview="dawn"]     { background: linear-gradient(135deg, oklch(0.52 0.15 45), oklch(0.78 0.13 85)); }
+[data-accent-preview="majlis"]   { background: linear-gradient(135deg, oklch(0.38 0.08 40), oklch(0.58 0.1 68)); }
+[data-accent-preview="saffron"]  { background: linear-gradient(135deg, oklch(0.55 0.14 60), oklch(0.74 0.13 80)); }

@@ -1,6 +1,7 @@
 /**
- * API helpers: request id, actor resolution, mode guard, error → RFC 9457 problem+json.
- * Every error carries an MZ- code and retryable flag; no empty catch blocks.
+ * API helpers: request id, actor resolution, mode guard, rate limit,
+ * error → RFC 9457 problem+json. Every error carries an MZ- code and
+ * retryable flag; no empty catch blocks.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -8,6 +9,7 @@ import { MzError, toMzError, generateCorrelationId } from "../domain/errors";
 import { resolveActor, type ActorContext } from "./session";
 import { getMode } from "./mode";
 import { sha256 } from "../domain/canonical";
+import { takeToken, sweepIfNeeded, DRY_RUN_BUDGET } from "./rate-limit";
 
 export interface Ctx<P = Record<string, string>> {
   req: NextRequest;
@@ -18,12 +20,17 @@ export interface Ctx<P = Record<string, string>> {
 
 type RouteHandler<P> = (ctx: Ctx<P>) => Promise<NextResponse> | NextResponse;
 
-/** Wrap a route handler with actor + error handling; params are awaited and passed through. */
+/** Wrap a route handler with actor + rate limit + error handling; params are awaited and passed through. */
 export function withApiRoute<P = Record<string, string>>(handler: RouteHandler<P>) {
   return async (req: NextRequest, ctx?: { params?: Promise<P> }): Promise<NextResponse> => {
     const correlationId = generateCorrelationId();
     try {
       const actor = await resolveActor(req.headers.get("x-mizan-actor"));
+      sweepIfNeeded();
+      const isDryRun = req.method === "POST" && req.nextUrl.pathname.includes("/integrations/") && req.nextUrl.pathname.endsWith("/dry-run");
+      if (!takeToken(`${actor.id}:${isDryRun ? "dry" : "api"}`, isDryRun ? DRY_RUN_BUDGET : undefined)) {
+        throw new MzError("MZ-RATE-429", "Too many requests from this actor; retry shortly.");
+      }
       const params = (ctx?.params ? await ctx.params : ({} as P)) as P;
       return await handler({ req, actor, correlationId, params });
     } catch (e) {

@@ -173,3 +173,21 @@ Stage Summary:
 - Visual identity upgraded from fallback system fonts to real IBM Plex Sans/Arabic/Mono (Emirates vibe, RTL first-class); favicon + metadata hardened; alignment polish on data tables.
 - API error surface hardened: no internal message leakage, correct status classes, server-side diagnostic logging.
 - No red lines touched: synthetic-only badge intact, human-in-the-loop flows unchanged.
+
+---
+Task ID: lux-retention
+Agent: orchestrator (Z.ai Code)
+Task: "do production and luxury or psychologically retentive plus appealing features and interface" — luxury/retention layer on the Overview experience.
+
+Work Log:
+- Built src/lib/client/use-count-up.ts: ref-driven count-up hook (ease-out cubic rAF, writes textContent directly — zero re-renders per frame, lint-clean under react-hooks/set-state-in-effect). Accepts format() (iso() for Arabic-Indic) + optional onUpdate to drive companion visuals; animates from current value on live refetch; reduced-motion users get the final value instantly.
+- globals.css luxury layer: .lux-card (layered soft shadows + gold hairline crown fading in on hover; deeper shadows in dark, never hue shifts), .pulse-dot breathing live indicator (reduced-motion safe via global rule), .active-press tactile CTA depression. Tokens only.
+- overview-view.tsx: GreetingHeader (time-aware EN/AR greeting with actor name from the shared system-state cache, Gregorian + Umm al-Qura Hijri dates via Intl — zero deps, try/catch fallback), gold-rule divider, "Census current" pulse chip when census COMPLETED; AnimatedNum count-up numerals on the census reconciliation chips, severity counts, open totals, coverage total; ReadinessRing (gold→brand SVG gradient ring + count-up score + "Audit ready"/"Hardening in progress" state label); Reveal staggered card entrances (framer-motion, reduced-motion aware); lux-card on all 7 cards; active-press on the Start-run CTA; grid re-wrapped so col-spans live on the Reveal wrappers.
+- page.tsx: first-visit ⌘K hint chip (localStorage mizan.kbd-hint, auto-dismiss 12s, dismissed on first palette open, EN/AR text) — retention through empowerment.
+- Fixed during build: initial setState-in-effect lint error by moving from state-per-frame to the ref-driven hook; ring reset-on-rerender edge covered by the idle re-sync write in the commit effect.
+- Verified: tsc clean (src/), eslint clean; browser: zero console errors; light screenshot (greeting + Hijri date "Jumada I 11, 1448 AH" + hint chip + pulse chip + ring at 80), dark "midnight majlis" screenshot, Arabic RTL screenshot (مساء الخير, Arabic-Indic census numerals ١٠٦١×١٣=١٥٩١٥, mirrored ring); golden path: Arabic nav → queue → row click → exception drawer opens with full 8-part explanation; gateway 200; browser closed after verification.
+
+Stage Summary:
+- Overview now lands the "production-luxury" first impression: personal greeting + Hijri calendar, living numbers, gold-crowned depth cards, readiness ring, staggered reveals, ⌘K empowerment hint.
+- Red lines untouched: synthetic-only chip intact, decisions remain human-in-the-loop (drawer untouched functionally), no model involvement.
+- Hook is reusable: useCountUpText can animate any future numeric surface (queue counters, runs view) with one line.

@@ -406,6 +406,76 @@
   box-shadow: inset 0 0 0 1.5px color-mix(in oklab, var(--gold) 65%, transparent);
 }
 
+/* ─── Luxury layer (production-grade depth & detail) ───────────────────────
+ * .lux-card: layered soft shadow + hairline gold crown that fades in on
+ * hover. Tokens only; dark mode deepens the shadow, never the hue.
+ */
+.lux-card {
+  position: relative;
+  box-shadow:
+    0 1px 2px oklch(0 0 0 / 0.04),
+    0 8px 24px -12px oklch(0 0 0 / 0.12);
+  transition:
+    box-shadow var(--duration-slow) ease,
+    transform var(--duration-slow) ease;
+}
+.lux-card::before {
+  content: "";
+  position: absolute;
+  inset-inline: 12%;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--gold), transparent);
+  opacity: 0;
+  transition: opacity var(--duration-slow) ease;
+  pointer-events: none;
+}
+.lux-card:hover {
+  box-shadow:
+    0 2px 4px oklch(0 0 0 / 0.05),
+    0 16px 40px -16px oklch(0 0 0 / 0.18);
+}
+.lux-card:hover::before {
+  opacity: 0.85;
+}
+.dark .lux-card {
+  box-shadow:
+    0 1px 2px oklch(0 0 0 / 0.28),
+    0 12px 32px -14px oklch(0 0 0 / 0.5);
+}
+.dark .lux-card:hover {
+  box-shadow:
+    0 2px 4px oklch(0 0 0 / 0.3),
+    0 20px 48px -16px oklch(0 0 0 / 0.6);
+}
+
+/* .pulse-dot: breathing "live" indicator for current census / heartbeats.
+ * Reduced-motion users get a static dot (global rule kills the animation). */
+.pulse-dot {
+  position: relative;
+  display: inline-block;
+}
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: var(--ok);
+  animation: mizan-pulse 2.4s ease-in-out infinite;
+}
+@keyframes mizan-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 0; transform: scale(2.4); }
+}
+
+/* .active-press: satisfying tactile depression on primary CTAs. */
+.active-press {
+  transition: transform var(--duration-instant) ease;
+}
+.active-press:active {
+  transform: scale(0.97);
+}
+
 /* Animated nav underline (mirrors in RTL via logical props + transform) */
 .nav-underline {
   position: relative;

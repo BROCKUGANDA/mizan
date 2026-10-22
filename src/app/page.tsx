@@ -65,6 +65,35 @@ function Shell() {
   const [resetting, setResetting] = useState(false);
   const reduceMotion = useReducedMotion();
 
+  // First-visit ⌘K hint (retention through empowerment): shown once, stored
+  // locally, auto-dismissed after 12s or on first palette open.
+  const [kbdHint, setKbdHint] = useState(false);
+  const dismissKbdHint = useCallback(() => {
+    setKbdHint(false);
+    try {
+      localStorage.setItem("mizan.kbd-hint", "1");
+    } catch {
+      // storage unavailable (private mode) — hint just won't persist
+    }
+  }, []);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (!localStorage.getItem("mizan.kbd-hint")) {
+        setKbdHint(true);
+        timer = setTimeout(dismissKbdHint, 12_000);
+      }
+    } catch {
+      // storage unavailable — skip the hint entirely
+    }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+  }, [dismissKbdHint]);
+  useEffect(() => {
+    if (commandOpen) dismissKbdHint();
+  }, [commandOpen, dismissKbdHint]);
+
   const { data: system } = useQuery<SystemState>({
     queryKey: ["system-state", actor],
     queryFn: () => api<SystemState>(v1("/system/state")),
@@ -163,9 +192,25 @@ function Shell() {
 
           <div className="ms-auto flex items-center gap-1.5">
             <ModeChip mode={mode} />
-            <Button variant="ghost" size="icon" aria-label={t("shortcuts.palette")} onClick={() => setCommandOpen(true)}>
-              <Command className="h-4 w-4" />
-            </Button>
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={t("shortcuts.palette")}
+                onClick={() => setCommandOpen(true)}
+              >
+                <Command className="h-4 w-4" />
+              </Button>
+              {kbdHint && !commandOpen ? (
+                <div
+                  className="absolute end-0 top-10 z-50 w-max rounded-md border border-gold/40 bg-popover px-3 py-1.5 text-xs text-popover-foreground shadow-lg"
+                  role="note"
+                >
+                  <kbd className="me-1 rounded border border-border bg-secondary px-1 font-mono text-[10px]">⌘K</kbd>
+                  {locale === "ar" ? "للوصول السريع إلى كل شيء" : "for anything, instantly"}
+                </div>
+              ) : null}
+            </div>
             <Button variant="ghost" size="icon" aria-label={t("shortcuts.help")} onClick={() => setShortcutsOpen(true)}>
               <HelpCircle className="h-4 w-4" />
             </Button>

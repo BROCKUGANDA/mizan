@@ -7,6 +7,7 @@
  */
 
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { STORAGE_KEYS } from "@/lib/app-config";
 
 export type Locale = "en" | "ar";
 
@@ -113,6 +114,134 @@ export const MESSAGES: Dict = {
   "shortcuts.help": { en: "Show shortcuts", ar: "إظهار الاختصارات" },
   "stillWorking": { en: "Still working…", ar: "ما زلنا نعمل…" },
   "stale": { en: "Showing results from an earlier projection", ar: "تُعرض نتائج من إسقاط سابق" },
+
+  /* ── Shell (header / footer / popover chrome) ──────────────────────────── */
+  "app.skipToContent": { en: "Skip to content", ar: "تخطَّ إلى المحتوى" },
+  "app.themeMenu": { en: "Appearance", ar: "المظهر" },
+  "app.roleSwitcher": { en: "Role switcher", ar: "تبديل الدور" },
+  "app.kbdHint": { en: "for anything, instantly", ar: "للوصول السريع إلى كل شيء" },
+  "app.notifications": { en: "Notifications", ar: "الإشعارات" },
+  "mode.judge": { en: "Judge mode", ar: "وضع المُقيِّم" },
+  "common.resetComplete": { en: "Reset complete", ar: "تمت إعادة التعيين" },
+  "app.footer.principles": {
+    en: "synthetic data only · the engine decides, the model explains",
+    ar: "بيانات تركيبية فقط · المحرك يقرر، والنموذج يفسّر",
+  },
+
+  /* ── Notification centre ───────────────────────────────────────────────── */
+  "notifications.empty": { en: "Nothing here yet", ar: "لا إشعارات بعد" },
+  "notifications.justNow": { en: "just now", ar: "الآن" },
+
+  /* ── Command palette ───────────────────────────────────────────────────── */
+  "palette.placeholder": { en: "Search views or exceptions…", ar: "ابحث عن وجهة أو استثناء…" },
+  "palette.empty": { en: "No results", ar: "لا نتائج" },
+  "palette.goto": { en: "Go to", ar: "التنقل" },
+  "palette.exceptions": { en: "Exceptions", ar: "استثناءات" },
+
+  /* ── Overview view ─────────────────────────────────────────────────────── */
+  "overview.greetingMorning": { en: "Good morning", ar: "صباح الخير" },
+  "overview.greetingAfternoon": { en: "Good afternoon", ar: "مساء الخير" },
+  "overview.greetingEvening": { en: "Good evening", ar: "مساء الخير" },
+  "overview.censusCurrent": { en: "Census current", ar: "التعداد محدَّث" },
+  "overview.runStarted": { en: "Run started", ar: "بدأ التشغيل" },
+  "overview.asOf": { en: "as of", ar: "كما في" },
+  "overview.outputHash": { en: "Output hash (sha-256, truncated)", ar: "هاش المخرجات" },
+  "overview.noCensus.title": { en: "No census yet", ar: "لا يوجد تعداد بعد" },
+  "overview.noCensus.hint": { en: "Start the first run to evaluate every transaction against every active rule and produce the full census (FS-02).", ar: "ابدأ التشغيل الأول لتحليل كل معاملة مقابل كل قاعدة نشطة وإنتاج التعداد الكامل (FS-02)." },
+  "overview.censusReconciliation": { en: "Census reconciliation", ar: "معادلة التعداد" },
+  "overview.transactions": { en: "transactions", ar: "معاملة" },
+  "overview.rules": { en: "rules", ar: "قاعدة" },
+  "overview.checks": { en: "checks", ar: "فحص" },
+  "overview.applicable": { en: "applicable", ar: "منطبق" },
+  "overview.evaluated": { en: "evaluated", ar: "مُقيَّم" },
+  "overview.notEvaluable": { en: "not evaluable", ar: "غير قابل للتقييم" },
+  "overview.failed": { en: "failed", ar: "فشل" },
+  "overview.passed": { en: "passed", ar: "ناجح" },
+  "overview.notApplicable": { en: "not applicable", ar: "غير منطبق" },
+  "overview.quarantined": { en: "quarantined", ar: "محجور" },
+  "overview.held": { en: "held", ar: "محتجز" },
+  "overview.dqExceptions": { en: "data-quality exceptions", ar: "استثناءات جودة بيانات" },
+  "overview.hold": { en: "Hold", ar: "احتجاز" },
+  "overview.auditReady": { en: "Audit ready", ar: "جاهز للتدقيق" },
+  "overview.hardening": { en: "Hardening in progress", ar: "قيد التحصين" },
+  "overview.compositeScore": { en: "Composite score out of ", ar: "الدرجة المركّبة من " },
+  "overview.weight": { en: "w", ar: "وزن" },
+  "overview.nextBestAction": { en: "Next best action", ar: "أفضل إجراء تالٍ" },
+  "overview.openBySeverity": { en: "Open by severity", ar: "المفتوحة حسب الخطورة" },
+  "overview.openTotal": { en: "Open total", ar: "إجمالي المفتوحة" },
+  "overview.allExceptions": { en: "All exceptions", ar: "كل الاستثناءات" },
+  "overview.noHotspots.title": { en: "No hotspots", ar: "لا توجد بؤر ساخنة" },
+  "overview.noHotspots.hint": { en: "Process × rule cells appear here after the first run.", ar: "ستظهر العمليات × القواعد هنا بعد التشغيل الأول." },
+  "overview.process": { en: "Process", ar: "العملية" },
+  "overview.rule": { en: "Rule", ar: "القاعدة" },
+  "overview.count": { en: "Count", ar: "العدد" },
+  "overview.per1000": { en: "Per 1,000", ar: "لكل ١٠٠٠" },
+  "overview.noTrends.title": { en: "No trend data", ar: "لا توجد بيانات اتجاهات" },
+  "overview.noTrends.hint": { en: "Monthly trend appears after the first run.", ar: "تظهر الاتجاهات الشهرية بعد أول تشغيل." },
+  "overview.trendsAria": { en: "Exceptions per month by severity", ar: "استثناءات لكل شهر حسب الخطورة" },
+  "overview.topGroups": { en: "Top groups", ar: "أكبر المجموعات" },
+  "overview.topGroupsHint": { en: "click to open the queue", ar: "اضغط للانتقال إلى القائمة" },
+  "overview.noGroups.title": { en: "No groups yet", ar: "لا توجد مجموعات" },
+  "overview.noGroups.hint": { en: "Similar exceptions are grouped automatically after a run.", ar: "تُجمَّع الاستثناءات المتشابهة تلقائياً بعد التشغيل." },
+  "overview.sentencesClassified": { en: "sentences classified — every written rule accounted for", ar: "جملة مصنَّفة — كل قاعدة مكتوبة محسوبة" },
+  "overview.compiledChecks": { en: "Compiled checks", ar: "مُجمَّعة (فحوص)" },
+  "overview.definitions": { en: "Definitions", ar: "تعريفات" },
+  "overview.attestations": { en: "Human attestations", ar: "إقرارات بشرية" },
+  "overview.scopeNotes": { en: "Scope notes", ar: "ملاحظات نطاق" },
+  "overview.measuredPrecision": { en: "Measured precision (Wilson lower bound)", ar: "الدقة المقاسة (حد ويلسون الأدنى)" },
+  "overview.confirmedDecisions": { en: "confirmed decisions", ar: "قرارات مؤكدة" },
+  "overview.noDecisions": { en: "No hand-labelled decisions yet.", ar: "لا توجد قرارات مُصنَّفة يدوياً بعد." },
+  "overview.patternAlerts": { en: "advisory pattern alerts awaiting review", ar: "تنبيهات أنماط استشارية في انتظار المراجعة" },
+
+  /* ── Runs view ─────────────────────────────────────────────────────────── */
+  "runs.started": { en: "Run started", ar: "بدأ التشغيل" },
+  "runs.startNew": { en: "Start a new run", ar: "بدء تشغيل جديد" },
+  "runs.startHint": { en: "Each run evaluates every transaction × every active rule (a full census).", ar: "كل تشغيل يُقيِّم كل معاملة × كل قاعدة نشطة (تعداد كامل)." },
+  "runs.kindAria": { en: "Run kind", ar: "نوع التشغيل" },
+  "runs.kindStandard": { en: "Standard", ar: "قياسي" },
+  "runs.kindShadow": { en: "Shadow (no side effects)", ar: "ظلّي (بدون تأثير)" },
+  "runs.kindBacktest": { en: "Backtest", ar: "اختبار رجعي" },
+  "runs.asOfAria": { en: "As-of date (optional)", ar: "تاريخ البيانات (اختياري)" },
+  "runs.checks": { en: "checks", ar: "فحص" },
+  "runs.noRuns.title": { en: "No runs yet", ar: "لا توجد تشغيلات بعد" },
+  "runs.noRuns.hint": { en: "Start the first run with the controls above to fill the exception queue.", ar: "ابدأ التشغيل الأول بالأزرار أعلاه لملء قائمة الاستثناءات." },
+  "runs.asOf": { en: "as of", ar: "كما في" },
+  "runs.failed": { en: "failed", ar: "فشل" },
+  "runs.notEvaluable": { en: "not evaluable", ar: "غير قابل للتقييم" },
+  "runs.held": { en: "held", ar: "محتجز" },
+  "runs.holdCount": { en: "hold(s)", ar: "احتجاز" },
+  "runs.startedAt": { en: "started", ar: "بدأ" },
+  "runs.detail": { en: "Run detail", ar: "تفاصيل التشغيل" },
+  "runs.manifest": { en: "Run manifest", ar: "بيان التشغيل (manifest)" },
+  "runs.hold": { en: "Hold", ar: "احتجاز" },
+  "runs.perRuleMatrix": { en: "Per-rule coverage matrix", ar: "مصفوفة التغطية لكل قاعدة" },
+  "runs.noPerRule": { en: "No per-rule results", ar: "لا توجد نتائج لكل قاعدة" },
+  "runs.perRuleAria": { en: "Per-rule coverage matrix", ar: "مصفوفة التغطية" },
+  "runs.colRule": { en: "Rule", ar: "القاعدة" },
+  "runs.colTotal": { en: "Total", ar: "الإجمالي" },
+  "runs.colPass": { en: "Pass", ar: "ناجح" },
+  "runs.colNA": { en: "N/A", ar: "غير منطبق" },
+  "runs.colNotEvaluable": { en: "Not evaluable", ar: "غير قابل للتقييم" },
+  "runs.colFailed": { en: "Failed", ar: "فشل" },
+  "runs.exportTitle": { en: "Export (FS-20)", ar: "التصدير (FS-20)" },
+  "runs.exportLocked": { en: "Export unlocks when the run completes (COMPLETED, COMPLETED_WITH_HOLDS or COMPLETED_WITH_DQ).", ar: "يتاح التصدير بعد اكتمال التشغيل (COMPLETED أو WITH_HOLDS أو WITH_DQ)." },
+  "runs.validatorPassedPrefix": { en: "Export validator passed —", ar: "اجتاز مُصادِق التصدير — أُعيد إنتاج" },
+  "runs.validatorPassedSuffix": { en: "worked examples reproduced", ar: "من الأمثلة المرجعية" },
+  "runs.profile": { en: "profile", ar: "الملف الشخصي" },
+  "runs.findingsSha": { en: "findings sha-256", ar: "هاش الملف" },
+  "runs.validatorFailed": { en: "Export validator failed — downloads are disabled", ar: "فشل مُصادِق التصدير — التنزيل معطّل" },
+  "runs.colTransaction": { en: "Transaction", ar: "المعاملة" },
+  "runs.colColumn": { en: "Column", ar: "العمود" },
+  "runs.colExpected": { en: "Expected", ar: "المتوقع" },
+  "runs.colActual": { en: "Actual", ar: "الفعلي" },
+  "runs.downloadFindings": { en: "Download findings CSV", ar: "تنزيل ملف النتائج" },
+  "runs.downloadFindingsDisabled": { en: "Download findings CSV (disabled: validator failed)", ar: "تنزيل ملف النتائج (معطّل: فشل المُصادِق)" },
+  "runs.downloadDq": { en: "Download data quality CSV", ar: "تنزيل ملف جودة البيانات" },
+  "runs.selectRun.title": { en: "Select a run to inspect", ar: "اختر تشغيلاً لعرض التفاصيل" },
+  "runs.selectRun.hint": { en: "The manifest, coverage matrix, holds and the export panel appear here.", ar: "يعرض البيان، مصفوفة التغطية، الاحتجازات ولوحة التصدير." },
+
+  /* ── Audit view ────────────────────────────────────────────────────────── */
+  "audit.verifyCommand": { en: "`mizan audit verify`", ar: "mizan audit verify" },
 };
 
 interface I18nCtx {
@@ -144,23 +273,23 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     queueMicrotask(() => {
-      const saved = window.localStorage.getItem("mizan-locale") as Locale | null;
+      const saved = window.localStorage.getItem(STORAGE_KEYS.locale) as Locale | null;
       if (saved === "ar" || saved === "en") setLocaleState(saved);
-      const ad = window.localStorage.getItem("mizan-digits");
+      const ad = window.localStorage.getItem(STORAGE_KEYS.digits);
       if (ad === "arabic") setArabicDigitsState(true);
     });
   }, []);
 
   const setLocale = (l: Locale): void => {
     setLocaleState(l);
-    window.localStorage.setItem("mizan-locale", l);
+    window.localStorage.setItem(STORAGE_KEYS.locale, l);
     document.documentElement.lang = l;
     document.documentElement.dir = l === "ar" ? "rtl" : "ltr";
   };
 
   const setArabicDigits = (v: boolean): void => {
     setArabicDigitsState(v);
-    window.localStorage.setItem("mizan-digits", v ? "arabic" : "western");
+    window.localStorage.setItem(STORAGE_KEYS.digits, v ? "arabic" : "western");
   };
 
   const t = (key: string): string => MESSAGES[key]?.[locale] ?? key;

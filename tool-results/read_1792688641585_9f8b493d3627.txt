@@ -1,0 +1,800 @@
+     1→"use client";
+     2→
+     3→/**
+     4→ * Overview view (Task 2-a): FS-02 census reconciliation banner, audit-readiness
+     5→ * score, open exceptions by severity, hotspot matrix, severity trends (pure CSS
+     6→ * bars — no chart library), top exception groups and coverage/governance.
+     7→ * Data: GET /api/v1/overview. Run start: POST /api/v1/runs (idempotent).
+     8→ */
+     9→
+    10→import { useCallback, useRef } from "react";
+    11→import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+    12→import { motion, useReducedMotion } from "framer-motion";
+    13→import { AlertTriangle, CheckCircle2, PauseCircle, Play, ShieldCheck } from "lucide-react";
+    14→import { useCountUpText } from "@/lib/client/use-count-up";
+    15→import { toast } from "@/hooks/use-toast";
+    16→import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+    17→import { Button } from "@/components/ui/button";
+    18→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+    19→import { Progress } from "@/components/ui/progress";
+    20→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+    21→import { EmptyState, ErrorState, LoadingSkeleton, SeverityBadge } from "@/components/mizan/primitives";
+    22→import { useI18n } from "@/lib/i18n/use-i18n";
+    23→import { api, ApiError, useAppStore, v1 } from "@/lib/client/store";
+    24→import type { Severity } from "@/lib/contracts";
+    25→import { cn } from "@/lib/utils";
+    26→
+    27→// ── Payload contracts (server: src/app/api/v1/overview + lib/server/analytics) ──
+    28→
+    29→interface RunHold {
+    30→  ruleId?: string;
+    31→  reason: string;
+    32→  kind: string;
+    33→}
+    34→
+    35→interface Census {
+    36→  runId: string;
+    37→  status: string;
+    38→  asOf: string;
+    39→  outputHash: string;
+    40→  holds: RunHold[];
+    41→  transactions?: number;
+    42→  rules?: number;
+    43→  checks?: number;
+    44→  applicable?: number;
+    45→  notApplicable?: number;
+    46→  evaluated?: number;
+    47→  notEvaluable?: number;
+    48→  passed?: number;
+    49→  failed?: number;
+    50→  quarantined?: number;
+    51→  held?: number;
+    52→  dqExceptions?: number;
+    53→}
+    54→
+    55→interface ReadinessComponent {
+    56→  key: string;
+    57→  label: string;
+    58→  weight: number;
+    59→  score: number; // 0..1
+    60→  note: string;
+    61→}
+    62→
+    63→interface Readiness {
+    64→  total: number; // 0..100
+    65→  components: ReadinessComponent[];
+    66→  nextBestAction: string;
+    67→}
+    68→
+    69→interface HotspotCell {
+    70→  process: string;
+    71→  ruleId: string;
+    72→  count: number;
+    73→  per1000: number;
+    74→  suppressed: boolean;
+    75→}
+    76→
+    77→interface TrendPoint {
+    78→  month: string;
+    79→  CRITICAL: number;
+    80→  HIGH: number;
+    81→  MEDIUM: number;
+    82→  LOW: number;
+    83→  total: number;
+    84→  suppressed: boolean;
+    85→}
+    86→
+    87→interface TopGroup {
+    88→  groupKey: string;
+    89→  count: number;
+    90→  ruleId: string;
+    91→  family: string;
+    92→  headline: string;
+    93→}
+    94→
+    95→interface CoverageSentence {
+    96→  anchor: string;
+    97→  status: string;
+    98→  family?: string;
+    99→  usedBy?: string[];
+   100→  note?: string;
+   101→}
+   102→
+   103→interface Coverage {
+   104→  packVersion: string;
+   105→  compiled: CoverageSentence[];
+   106→  definitions: CoverageSentence[];
+   107→  scopeNotes: CoverageSentence[];
+   108→  attestations: CoverageSentence[];
+   109→  total: number;
+   110→}
+   111→
+   112→interface MeasuredPrecision {
+   113→  decided: number;
+   114→  confirmed: number;
+   115→  lowerBound: number;
+   116→  method: string;
+   117→}
+   118→
+   119→interface OverviewPayload {
+   120→  census: Census | null;
+   121→  counts: { open: number; openBySeverity: Record<string, number>; total: number };
+   122→  readiness: Readiness;
+   123→  hotspots: HotspotCell[];
+   124→  trends: TrendPoint[];
+   125→  topGroups: TopGroup[];
+   126→  coverage: Coverage;
+   127→  measuredPrecision: MeasuredPrecision | null;
+   128→  patternsSummary: number;
+   129→}
+   130→
+   131→const SEVERITIES: Severity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+   132→
+   133→const SEV_BAR: Record<Severity, string> = {
+   134→  CRITICAL: "bg-sev-critical",
+   135→  HIGH: "bg-sev-high",
+   136→  MEDIUM: "bg-sev-medium",
+   137→  LOW: "bg-sev-low",
+   138→};
+   139→
+   140→/** Run status chip (short form used inside the census banner). */
+   141→function RunStateBadge({ status }: { status: string }) {
+   142→  const style =
+   143→    status === "COMPLETED"
+   144→      ? "border-ok/40 bg-ok/10 text-foreground"
+   145→      : status.endsWith("_WITH_HOLDS")
+   146→        ? "border-hold/40 bg-hold/10 text-hold"
+   147→        : status.endsWith("_WITH_DQ")
+   148→          ? "border-sev-medium/40 bg-sev-medium/10 text-foreground"
+   149→          : status === "FAILED" || status === "CANCELLED"
+   150→            ? "border-destructive/40 bg-destructive/10 text-destructive"
+   151→            : "border-border bg-secondary text-foreground";
+   152→  return (
+   153→    <span className={cn("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium", style)} role="status">
+   154→      {status}
+   155→    </span>
+   156→  );
+   157→}
+   158→
+   159→/** A number rendered as a small font-mono badge (digits through iso()). */
+   160→function Num({ value, className }: { value: string | number; className?: string }) {
+   161→  const { iso } = useI18n();
+   162→  return (
+   163→    <span className={cn("inline-flex min-w-8 items-center justify-center rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-xs tabular-nums", className)}>
+   164→      {iso(String(value))}
+   165→    </span>
+   166→  );
+   167→}
+   168→
+   169→function SectionTitle({ children }: { children: React.ReactNode }) {
+   170→  return (
+   171→    <CardTitle className="text-sm font-medium text-muted-foreground">
+   172→      {children}
+   173→    </CardTitle>
+   174→  );
+   175→}
+   176→
+   177→/** api() reuses RequestInit's `body?: BodyInit` slot for JSON payloads; cast objects at call sites (runtime still JSON-stringifies). */
+   178→const jsonBody = (b: unknown): BodyInit => b as unknown as BodyInit;
+   179→
+   180→/* ─── Luxury/retention layer (§31 polish) ─────────────────────────────────── */
+   181→
+   182→/** Count-up numeral. variant "chip" mirrors Num, "plain" is a bare figure. */
+   183→function AnimatedNum({
+   184→  value,
+   185→  variant = "chip",
+   186→  durationMs,
+   187→  className,
+   188→}: {
+   189→  value: string | number;
+   190→  variant?: "chip" | "plain";
+   191→  durationMs?: number;
+   192→  className?: string;
+   193→}) {
+   194→  const { iso } = useI18n();
+   195→  const numeric = typeof value === "number" ? value : Number(String(value).replace(/[^\d.-]/g, "")) || 0;
+   196→  const fmt = useCallback((n: number) => iso(String(Math.round(n))), [iso]);
+   197→  const ref = useCountUpText<HTMLSpanElement>(numeric, fmt, { durationMs: durationMs ?? 900 });
+   198→  if (variant === "chip") {
+   199→    return (
+   200→      <span ref={ref} className={cn("inline-flex min-w-8 items-center justify-center rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-xs tabular-nums", className)} />
+   201→    );
+   202→  }
+   203→  return <span ref={ref} className={cn("font-mono tabular-nums", className)} />;
+   204→}
+   205→
+   206→/** Gold→brand progress ring with a count-up score; one eased rAF drives both. */
+   207→function ReadinessRing({ value }: { value: number }) {
+   208→  const { iso } = useI18n();
+   209→  const clamped = Math.max(0, Math.min(100, value));
+   210→  const r = 52;
+   211→  const c = 2 * Math.PI * r;
+   212→  const circleRef = useRef<SVGCircleElement | null>(null);
+   213→  const fmt = useCallback((n: number) => iso(String(Math.round(n))), [iso]);
+   214→  const numRef = useCountUpText<HTMLSpanElement>(clamped, fmt, {
+   215→    durationMs: 1100,
+   216→    onUpdate: (v) => {
+   217→      const pct = Math.max(0, Math.min(100, v)) / 100;
+   218→      circleRef.current?.setAttribute("stroke-dashoffset", String(c * (1 - pct)));
+   219→    },
+   220→  });
+   221→  return (
+   222→    <div className="relative h-28 w-28 shrink-0" role="img" aria-label={`${value} / 100`}>
+   223→      <svg viewBox="0 0 120 120" className="h-full w-full -rotate-90" aria-hidden>
+   224→        <circle cx="60" cy="60" r={r} fill="none" stroke="var(--border)" strokeWidth="8" />
+   225→        <defs>
+   226→          <linearGradient id="mizan-rr-grad" x1="0" y1="0" x2="1" y2="1">
+   227→            <stop offset="0%" stopColor="var(--gold)" />
+   228→            <stop offset="100%" stopColor="var(--brand)" />
+   229→          </linearGradient>
+   230→        </defs>
+   231→        <circle
+   232→          ref={circleRef}
+   233→          cx="60"
+   234→          cy="60"
+   235→          r={r}
+   236→          fill="none"
+   237→          stroke="url(#mizan-rr-grad)"
+   238→          strokeWidth="8"
+   239→          strokeLinecap="round"
+   240→          strokeDasharray={c}
+   241→          strokeDashoffset={c}
+   242→        />
+   243→      </svg>
+   244→      <div className="absolute inset-0 flex flex-col items-center justify-center">
+   245→        <span ref={numRef} className="font-mono text-2xl font-bold tabular-nums" />
+   246→        <span className="text-[10px] text-muted-foreground">{iso("100")}</span>
+   247→      </div>
+   248→    </div>
+   249→  );
+   250→}
+   251→
+   252→/** Staggered entrance wrapper; reduced-motion users get a plain div. */
+   253→function Reveal({ index, className, children }: { index: number; className?: string; children: React.ReactNode }) {
+   254→  const reduce = useReducedMotion();
+   255→  if (reduce) return <div className={className}>{children}</div>;
+   256→  return (
+   257→    <motion.div
+   258→      className={className}
+   259→      initial={{ opacity: 0, y: 12 }}
+   260→      animate={{ opacity: 1, y: 0 }}
+   261→      transition={{ duration: 0.32, delay: Math.min(index * 0.06, 0.42), ease: "easeOut" }}
+   262→    >
+   263→      {children}
+   264→    </motion.div>
+   265→  );
+   266→}
+   267→
+   268→interface SystemStateLite {
+   269→  actors: { id: string; name: string; role: string }[];
+   270→}
+   271→
+   272→/** Time-aware greeting + Gregorian and Umm al-Qura Hijri dates (luxury, zero deps). */
+   273→function GreetingHeader({ live }: { live: boolean }) {
+   274→  const { locale } = useI18n();
+   275→  const actor = useAppStore((s) => s.actor);
+   276→  // Shares the shell's ["system-state", actor] cache — no extra polling.
+   277→  const { data: system } = useQuery<SystemStateLite>({
+   278→    queryKey: ["system-state", actor],
+   279→    queryFn: () => api<SystemStateLite>(v1("/system/state")),
+   280→    staleTime: 10_000,
+   281→    refetchInterval: false,
+   282→  });
+   283→  const name = system?.actors.find((a) => a.id === actor)?.name ?? actor;
+   284→  const now = new Date();
+   285→  const h = now.getHours();
+   286→  const greeting =
+   287→    locale === "ar"
+   288→      ? h < 12
+   289→        ? "صباح الخير"
+   290→        : "مساء الخير"
+   291→      : h < 12
+   292→        ? "Good morning"
+   293→        : h < 17
+   294→          ? "Good afternoon"
+   295→          : "Good evening";
+   296→  const gregorian = new Intl.DateTimeFormat(locale === "ar" ? "ar-AE" : "en-AE", {
+   297→    weekday: "long",
+   298→    day: "numeric",
+   299→    month: "long",
+   300→    year: "numeric",
+   301→  }).format(now);
+   302→  let hijri = "";
+   303→  try {
+   304→    hijri = new Intl.DateTimeFormat(locale === "ar" ? "ar-AE-u-ca-islamic-umalqura" : "en-u-ca-islamic-umalqura", {
+   305→      day: "numeric",
+   306→      month: "long",
+   307→      year: "numeric",
+   308→    }).format(now);
+   309→  } catch {
+   310→    hijri = ""; // ICU without islamic calendar — Gregorian line still shows
+   311→  }
+   312→  return (
+   313→    <div>
+   314→      <div className="flex flex-wrap items-end justify-between gap-4">
+   315→        <div>
+   316→          <h1 className="text-xl font-semibold tracking-tight">
+   317→            {greeting}, <span className="text-brand">{name}</span>
+   318→          </h1>
+   319→          <p className="mt-1 text-xs text-muted-foreground">
+   320→            {gregorian}
+   321→            {hijri ? (
+   322→              <>
+   323→                <span aria-hidden> · </span>
+   324→                {hijri}
+   325→              </>
+   326→            ) : null}
+   327→          </p>
+   328→        </div>
+   329→        {live ? (
+   330→          <span
+   331→            className="inline-flex items-center gap-2 rounded-full border border-ok/40 bg-ok/10 px-3 py-1 text-xs text-foreground"
+   332→            role="status"
+   333→          >
+   334→            <span className="pulse-dot h-2 w-2 rounded-full bg-ok" aria-hidden />
+   335→            {locale === "ar" ? "التعداد محدَّث" : "Census current"}
+   336→          </span>
+   337→        ) : null}
+   338→      </div>
+   339→      <div className="gold-rule mt-4" aria-hidden />
+   340→    </div>
+   341→  );
+   342→}
+   343→
+   344→export default function OverviewView() {
+   345→  const { t, locale, iso } = useI18n();
+   346→  const setView = useAppStore((s) => s.setView);
+   347→  const setSelectedException = useAppStore((s) => s.setSelectedException);
+   348→  const qc = useQueryClient();
+   349→
+   350→  const { data, isPending, isError, error, refetch } = useQuery<OverviewPayload>({
+   351→    queryKey: ["overview"],
+   352→    queryFn: () => api<OverviewPayload>(v1("/overview")),
+   353→  });
+   354→
+   355→  const startMut = useMutation({
+   356→    mutationFn: () =>
+   357→      api<{ runId: string; status: string }>(v1("/runs"), {
+   358→        method: "POST",
+   359→        body: jsonBody({}),
+   360→        headers: { "idempotency-key": crypto.randomUUID() },
+   361→      }),
+   362→    onSuccess: async (r) => {
+   363→      await qc.invalidateQueries();
+   364→      toast({
+   365→        title: locale === "ar" ? "بدأ التشغيل" : "Run started",
+   366→        description: `${r.runId} · ${r.status}`,
+   367→      });
+   368→    },
+   369→    onError: (err) => {
+   370→      toast({
+   371→        variant: "destructive",
+   372→        title: t("common.error"),
+   373→        description: err instanceof Error ? err.message : "Failed to start run",
+   374→      });
+   375→    },
+   376→  });
+   377→
+   378→  if (isPending) {
+   379→    return (
+   380→      <div className="space-y-6" aria-busy>
+   381→        <LoadingSkeleton rows={3} />
+   382→        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+   383→          <LoadingSkeleton rows={2} />
+   384→          <LoadingSkeleton rows={2} />
+   385→          <LoadingSkeleton rows={2} />
+   386→        </div>
+   387→      </div>
+   388→    );
+   389→  }
+   390→
+   391→  if (isError) {
+   392→    return (
+   393→      <ErrorState
+   394→        message={error instanceof Error ? error.message : "Unknown error"}
+   395→        code={error instanceof ApiError ? error.code : undefined}
+   396→        onRetry={() => void refetch()}
+   397→      />
+   398→    );
+   399→  }
+   400→
+   401→  const d = data as OverviewPayload;
+   402→  const census = d.census;
+   403→  const readiness = d.readiness;
+   404→  const openBySev = d.counts.openBySeverity ?? {};
+   405→  const maxTrend = Math.max(1, ...d.trends.map((p) => p.total));
+   406→
+   407→  return (
+   408→    <>
+   409→      <GreetingHeader live={census?.status === "COMPLETED"} />
+   410→      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
+   411→      {/* ── 1. Census banner (FS-02) — full width ──────────────────────────── */}
+   412→      <Reveal index={0} className="lg:col-span-3">
+   413→      <Card className="lux-card">
+   414→        <CardHeader className="pb-0">
+   415→          <div className="flex flex-wrap items-center justify-between gap-3">
+   416→            <SectionTitle>{t("overview.census")}</SectionTitle>
+   417→            {census ? (
+   418→              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+   419→                <RunStateBadge status={census.status} />
+   420→                <span>
+   421→                  {locale === "ar" ? "كما في" : "as of"}{" "}
+   422→                  <span className="font-mono">{iso(census.asOf)}</span>
+   423→                </span>
+   424→                <span className="inline-flex items-center gap-1" title={locale === "ar" ? "هاش المخرجات" : "Output hash (sha-256, truncated)"}>
+   425→                  <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
+   426→                  <span className="font-mono">{iso(census.outputHash.slice(0, 16))}</span>
+   427→                </span>
+   428→              </div>
+   429→            ) : null}
+   430→          </div>
+   431→        </CardHeader>
+   432→        <CardContent className="space-y-4">
+   433→          {startMut.isPending ? (
+   434→            <LoadingSkeleton rows={3} />
+   435→          ) : !census ? (
+   436→            <div className="flex flex-col items-center gap-4">
+   437→              <EmptyState
+   438→                title={locale === "ar" ? "لا يوجد تعداد بعد" : "No census yet"}
+   439→                hint={
+   440→                  locale === "ar"
+   441→                    ? "ابدأ التشغيل الأول لتحليل كل معاملة مقابل كل قاعدة نشطة وإنتاج التعداد الكامل (FS-02)."
+   442→                    : "Start the first run to evaluate every transaction against every active rule and produce the full census (FS-02)."
+   443→                }
+   444→                icon={<Play className="h-8 w-8" aria-hidden />}
+   445→              />
+   446→              <Button onClick={() => startMut.mutate()} aria-label={t("common.startRun")} className="active-press">
+   447→                <Play className="h-4 w-4" aria-hidden />
+   448→                {t("common.startRun")}
+   449→              </Button>
+   450→            </div>
+   451→          ) : (
+   452→            <>
+   453→              {/* Reconciliation sentence */}
+   454→              <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm" role="group" aria-label={locale === "ar" ? "معادلة التعداد" : "Census reconciliation"}>
+   455→                <AnimatedNum value={census.transactions ?? 0} />
+   456→                <span className="text-muted-foreground">{locale === "ar" ? "معاملة" : "transactions"}</span>
+   457→                <span className="text-muted-foreground" aria-hidden>×</span>
+   458→                <AnimatedNum value={census.rules ?? 0} />
+   459→                <span className="text-muted-foreground">{locale === "ar" ? "قاعدة" : "rules"}</span>
+   460→                <span className="text-muted-foreground" aria-hidden>=</span>
+   461→                <AnimatedNum value={census.checks ?? 0} />
+   462→                <span className="text-muted-foreground">{locale === "ar" ? "فحص" : "checks"}</span>
+   463→                <span className="text-muted-foreground" aria-hidden>·</span>
+   464→                <AnimatedNum value={census.applicable ?? 0} />
+   465→                <span className="text-muted-foreground">{locale === "ar" ? "منطبق" : "applicable"}</span>
+   466→                <span className="text-muted-foreground" aria-hidden>·</span>
+   467→                <AnimatedNum value={census.evaluated ?? 0} />
+   468→                <span className="text-muted-foreground">{locale === "ar" ? "مُقيَّم" : "evaluated"}</span>
+   469→                <span className="text-muted-foreground" aria-hidden>·</span>
+   470→                <AnimatedNum value={census.notEvaluable ?? 0} />
+   471→                <span className="text-muted-foreground">{locale === "ar" ? "غير قابل للتقييم" : "not evaluable"}</span>
+   472→                <span className="text-muted-foreground" aria-hidden>·</span>
+   473→                <AnimatedNum value={census.failed ?? 0} />
+   474→                <span className="text-muted-foreground">{locale === "ar" ? "فشل" : "failed"}</span>
+   475→              </div>
+   476→
+   477→              {/* Secondary census stats */}
+   478→              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+   479→                <span className="inline-flex items-center gap-1.5">
+   480→                  {locale === "ar" ? "ناجح" : "passed"} <Num value={census.passed ?? 0} />
+   481→                </span>
+   482→                <span className="inline-flex items-center gap-1.5">
+   483→                  {locale === "ar" ? "غير منطبق" : "not applicable"} <Num value={census.notApplicable ?? 0} />
+   484→                </span>
+   485→                <span className="inline-flex items-center gap-1.5">
+   486→                  {locale === "ar" ? "محجور" : "quarantined"} <Num value={census.quarantined ?? 0} />
+   487→                </span>
+   488→                <span className="inline-flex items-center gap-1.5">
+   489→                  {locale === "ar" ? "محتجز" : "held"} <Num value={census.held ?? 0} />
+   490→                </span>
+   491→                <span className="inline-flex items-center gap-1.5">
+   492→                  {locale === "ar" ? "استثناءات جودة بيانات" : "data-quality exceptions"} <Num value={census.dqExceptions ?? 0} />
+   493→                </span>
+   494→              </div>
+   495→
+   496→              {/* Run holds (FS-05/FS-06/FS-07) */}
+   497→              {census.holds.length > 0 ? (
+   498→                <div className="space-y-2">
+   499→                  {census.holds.map((h, i) => (
+   500→                    <Alert key={`${h.kind}-${h.ruleId ?? i}`} className="border-hold/40 bg-hold/10 text-foreground">
+   501→                      <PauseCircle className="h-4 w-4 text-hold" aria-hidden />
+   502→                      <AlertTitle>
+   503→                        {locale === "ar" ? "احتجاز" : "Hold"} · {h.kind}
+   504→                        {h.ruleId ? ` · ${h.ruleId}` : ""}
+   505→                      </AlertTitle>
+   506→                      <AlertDescription>{h.reason}</AlertDescription>
+   507→                    </Alert>
+   508→                  ))}
+   509→                </div>
+   510→              ) : null}
+   511→            </>
+   512→          )}
+   513→        </CardContent>
+   514→      </Card>
+   515→      </Reveal>
+   516→
+   517→      {/* ── 2. Audit readiness ─────────────────────────────────────────────── */}
+   518→      <Reveal index={1}>
+   519→      <Card className="lux-card">
+   520→        <CardHeader className="pb-0">
+   521→          <SectionTitle>{t("overview.readiness")}</SectionTitle>
+   522→        </CardHeader>
+   523→        <CardContent className="space-y-4">
+   524→          <div className="flex items-center gap-4">
+   525→            <ReadinessRing value={readiness.total} />
+   526→            <div className="min-w-0">
+   527→              <p className="text-sm font-medium">
+   528→                {readiness.total >= 80
+   529→                  ? locale === "ar"
+   530→                    ? "جاهز للتدقيق"
+   531→                    : "Audit ready"
+   532→                  : locale === "ar"
+   533→                    ? "قيد التحصين"
+   534→                    : "Hardening in progress"}
+   535→              </p>
+   536→              <p className="text-xs text-muted-foreground">
+   537→                {locale === "ar" ? "الدرجة المركّبة من " : "Composite score out of "}
+   538→                {iso("100")}
+   539→              </p>
+   540→            </div>
+   541→          </div>
+   542→          <div className="space-y-3">
+   543→            {readiness.components.map((c) => (
+   544→              <div key={c.key} className="space-y-1">
+   545→                <div className="flex items-center justify-between gap-2 text-sm">
+   546→                  <span className="font-medium">{c.label}</span>
+   547→                  <span className="flex items-center gap-2 text-xs text-muted-foreground">
+   548→                    <span className="font-mono tabular-nums">{iso(String(Math.round(c.score * 100)))}%</span>
+   549→                    <span aria-hidden>·</span>
+   550→                    <span>{locale === "ar" ? "وزن" : "w"} {iso(String(c.weight))}</span>
+   551→                  </span>
+   552→                </div>
+   553→                <Progress value={Math.round(c.score * 100)} aria-label={`${c.label}: ${Math.round(c.score * 100)}%`} />
+   554→                <p className="text-xs text-muted-foreground">{c.note}</p>
+   555→              </div>
+   556→            ))}
+   557→          </div>
+   558→          <div className="rounded-md border border-brand/30 bg-brand/5 p-3" role="note">
+   559→            <p className="text-xs font-medium text-brand">{locale === "ar" ? "أفضل إجراء تالٍ" : "Next best action"}</p>
+   560→            <p className="mt-1 text-sm">{readiness.nextBestAction}</p>
+   561→          </div>
+   562→        </CardContent>
+   563→      </Card>
+   564→      </Reveal>
+   565→
+   566→      {/* ── 3. Open by severity ────────────────────────────────────────────── */}
+   567→      <Reveal index={2}>
+   568→      <Card className="lux-card">
+   569→        <CardHeader className="pb-0">
+   570→          <SectionTitle>{locale === "ar" ? "المفتوحة حسب الخطورة" : "Open by severity"}</SectionTitle>
+   571→        </CardHeader>
+   572→        <CardContent className="space-y-3">
+   573→          {SEVERITIES.map((s) => (
+   574→            <div key={s} className="flex items-center justify-between gap-2">
+   575→              <SeverityBadge severity={s} />
+   576→              <AnimatedNum value={openBySev[s] ?? 0} variant="plain" className="text-sm" />
+   577→            </div>
+   578→          ))}
+   579→          <div className="flex items-center justify-between gap-2 border-t pt-3 text-sm">
+   580→            <span className="text-muted-foreground">{locale === "ar" ? "إجمالي المفتوحة" : "Open total"}</span>
+   581→            <AnimatedNum value={d.counts.open ?? 0} variant="plain" />
+   582→          </div>
+   583→          <div className="flex items-center justify-between gap-2 text-sm">
+   584→            <span className="text-muted-foreground">{locale === "ar" ? "كل الاستثناءات" : "All exceptions"}</span>
+   585→            <AnimatedNum value={d.counts.total ?? 0} variant="plain" />
+   586→          </div>
+   587→        </CardContent>
+   588→      </Card>
+   589→      </Reveal>
+   590→
+   591→      {/* ── 4. Hotspots ────────────────────────────────────────────────────── */}
+   592→      <Reveal index={3}>
+   593→      <Card className="lux-card">
+   594→        <CardHeader className="pb-0">
+   595→          <SectionTitle>{t("overview.hotspots")}</SectionTitle>
+   596→        </CardHeader>
+   597→        <CardContent>
+   598→          {d.hotspots.length === 0 ? (
+   599→            <EmptyState
+   600→              title={locale === "ar" ? "لا توجد بؤر ساخنة" : "No hotspots"}
+   601→              hint={locale === "ar" ? "ستظهر العمليات × القواعد هنا بعد التشغيل الأول." : "Process × rule cells appear here after the first run."}
+   602→            />
+   603→          ) : (
+   604→            <div className="max-h-72 overflow-y-auto" role="region" aria-label={t("overview.hotspots")}>
+   605→              <Table>
+   606→                <TableHeader>
+   607→                  <TableRow>
+   608→                    <TableHead scope="col">{locale === "ar" ? "العملية" : "Process"}</TableHead>
+   609→                    <TableHead scope="col">{locale === "ar" ? "القاعدة" : "Rule"}</TableHead>
+   610→                    <TableHead scope="col" className="text-end">{locale === "ar" ? "العدد" : "Count"}</TableHead>
+   611→                    <TableHead scope="col" className="text-end">{locale === "ar" ? "لكل ١٠٠٠" : "Per 1,000"}</TableHead>
+   612→                  </TableRow>
+   613→                </TableHeader>
+   614→                <TableBody>
+   615→                  {d.hotspots.map((cell) => (
+   616→                    <TableRow
+   617→                      key={`${cell.process}|${cell.ruleId}`}
+   618→                      className={cn(cell.suppressed && "hatch-suppressed")}
+   619→                      title={cell.suppressed ? "fewer than 5" : undefined}
+   620→                    >
+   621→                      <TableCell className="max-w-48 truncate">{cell.process}</TableCell>
+   622→                      <TableCell className="font-mono text-xs">{cell.ruleId}</TableCell>
+   623→                      <TableCell className="text-end font-mono tabular-nums">
+   624→                        {cell.suppressed ? (
+   625→                          <span className="text-xs italic text-muted-foreground">fewer than 5</span>
+   626→                        ) : (
+   627→                          iso(String(cell.count))
+   628→                        )}
+   629→                      </TableCell>
+   630→                      <TableCell className="text-end font-mono tabular-nums">{iso(String(cell.per1000))}</TableCell>
+   631→                    </TableRow>
+   632→                  ))}
+   633→                </TableBody>
+   634→              </Table>
+   635→            </div>
+   636→          )}
+   637→        </CardContent>
+   638→      </Card>
+   639→      </Reveal>
+   640→
+   641→      {/* ── 5. Trends (pure CSS bars) ──────────────────────────────────────── */}
+   642→      <Reveal index={4}>
+   643→      <Card className="lux-card">
+   644→        <CardHeader className="pb-0">
+   645→          <div className="flex flex-wrap items-center justify-between gap-2">
+   646→            <SectionTitle>{t("overview.trends")}</SectionTitle>
+   647→            <div className="flex items-center gap-2" aria-hidden>
+   648→              {SEVERITIES.map((s) => (
+   649→                <span key={s} className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+   650→                  <span className={cn("h-2 w-2 rounded-sm", SEV_BAR[s])} /> {t(`severity.${s}`)}
+   651→                </span>
+   652→              ))}
+   653→            </div>
+   654→          </div>
+   655→        </CardHeader>
+   656→        <CardContent>
+   657→          {d.trends.length === 0 ? (
+   658→            <EmptyState
+   659→              title={locale === "ar" ? "لا توجد بيانات اتجاهات" : "No trend data"}
+   660→              hint={locale === "ar" ? "تظهر الاتجاهات الشهرية بعد أول تشغيل." : "Monthly trend appears after the first run."}
+   661→            />
+   662→          ) : (
+   663→            <div className="flex items-end gap-4 overflow-x-auto pb-1" role="img" aria-label={locale === "ar" ? "استثناءات لكل شهر حسب الخطورة" : "Exceptions per month by severity"}>
+   664→              {d.trends.map((p) => (
+   665→                <div key={p.month} className="flex min-w-14 flex-col items-center gap-1">
+   666→                  <div
+   667→                    className={cn("flex h-12 items-end gap-0.5", p.suppressed && "hatch-suppressed rounded-sm")}
+   668→                    title={p.suppressed ? "fewer than 5" : undefined}
+   669→                  >
+   670→                    {SEVERITIES.map((s) => {
+   671→                      const count = p[s] ?? 0;
+   672→                      const h = count === 0 ? 0 : Math.max(4, Math.round((count / maxTrend) * 48));
+   673→                      return (
+   674→                        <div
+   675→                          key={s}
+   676→                          className={cn("w-2 rounded-t-sm", SEV_BAR[s], h === 0 && "opacity-20")}
+   677→                          style={{ height: `${h}px` }}
+   678→                          title={`${s}: ${count}`}
+   679→                        />
+   680→                      );
+   681→                    })}
+   682→                  </div>
+   683→                  <span className="font-mono text-[10px] text-muted-foreground">{iso(p.month)}</span>
+   684→                  <span className="font-mono text-xs tabular-nums">{iso(String(p.total))}</span>
+   685→                </div>
+   686→              ))}
+   687→            </div>
+   688→          )}
+   689→        </CardContent>
+   690→      </Card>
+   691→      </Reveal>
+   692→
+   693→      {/* ── 6. Top groups ──────────────────────────────────────────────────── */}
+   694→      <Reveal index={5}>
+   695→      <Card className="lux-card">
+   696→        <CardHeader className="pb-0">
+   697→          <div className="flex flex-wrap items-center justify-between gap-2">
+   698→            <SectionTitle>{locale === "ar" ? "أكبر المجموعات" : "Top groups"}</SectionTitle>
+   699→            <span className="text-xs text-muted-foreground">{locale === "ar" ? "اضغط للانتقال إلى القائمة" : "click to open the queue"}</span>
+   700→          </div>
+   701→        </CardHeader>
+   702→        <CardContent>
+   703→          {d.topGroups.length === 0 ? (
+   704→            <EmptyState
+   705→              title={locale === "ar" ? "لا توجد مجموعات" : "No groups yet"}
+   706→              hint={locale === "ar" ? "تُجمَّع الاستثناءات المتشابهة تلقائياً بعد التشغيل." : "Similar exceptions are grouped automatically after a run."}
+   707→            />
+   708→          ) : (
+   709→            <div className="max-h-64 space-y-1 overflow-y-auto" role="list" aria-label={locale === "ar" ? "أكبر المجموعات" : "Top groups"}>
+   710→              {d.topGroups.map((g) => (
+   711→                <button
+   712→                  key={g.groupKey}
+   713→                  type="button"
+   714→                  role="listitem"
+   715→                  onClick={() => {
+   716→                    setSelectedException(null);
+   717→                    setView("queue");
+   718→                  }}
+   719→                  className="flex w-full items-center gap-3 rounded-md border border-transparent px-2 py-2 text-start transition-colors duration-200 hover:border-border hover:bg-secondary"
+   720→                  aria-label={`${g.ruleId}: ${g.headline} (${g.count})`}
+   721→                >
+   722→                  <Num value={g.count} />
+   723→                  <span className="font-mono text-xs text-muted-foreground">{g.ruleId}</span>
+   724→                  <span className="min-w-0 flex-1 truncate text-sm">{g.headline}</span>
+   725→                </button>
+   726→              ))}
+   727→            </div>
+   728→          )}
+   729→        </CardContent>
+   730→      </Card>
+   731→      </Reveal>
+   732→
+   733→      {/* ── 7. Coverage & governance ───────────────────────────────────────── */}
+   734→      <Reveal index={6}>
+   735→      <Card className="lux-card">
+   736→        <CardHeader className="pb-0">
+   737→          <SectionTitle>{t("overview.coverage")}</SectionTitle>
+   738→        </CardHeader>
+   739→        <CardContent className="space-y-4">
+   740→          <div className="flex flex-wrap items-baseline gap-2">
+   741→            <AnimatedNum value={d.coverage.total} variant="plain" className="text-2xl font-bold" durationMs={1200} />
+   742→            <span className="text-sm text-muted-foreground">
+   743→              {locale === "ar" ? "جملة مصنَّفة — كل قاعدة مكتوبة محسوبة" : "sentences classified — every written rule accounted for"}
+   744→            </span>
+   745→          </div>
+   746→          <div className="grid grid-cols-2 gap-3">
+   747→            {(
+   748→              [
+   749→                { key: "compiled", label: locale === "ar" ? "مُجمَّعة (فحوص)" : "Compiled checks", items: d.coverage.compiled },
+   750→                { key: "definitions", label: locale === "ar" ? "تعريفات" : "Definitions", items: d.coverage.definitions },
+   751→                { key: "attestations", label: locale === "ar" ? "إقرارات بشرية" : "Human attestations", items: d.coverage.attestations },
+   752→                { key: "scopeNotes", label: locale === "ar" ? "ملاحظات نطاق" : "Scope notes", items: d.coverage.scopeNotes },
+   753→              ] as const
+   754→            ).map((row) => (
+   755→              <div key={row.key} className="rounded-md border border-border bg-secondary/50 p-3">
+   756→                <p className="text-xs text-muted-foreground">{row.label}</p>
+   757→                <p className="mt-0.5 font-mono text-lg font-semibold tabular-nums">{iso(String(row.items.length))}</p>
+   758→                <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+   759→                  {row.items.map((i) => i.anchor).join(", ")}
+   760→                </p>
+   761→              </div>
+   762→            ))}
+   763→          </div>
+   764→
+   765→          <div className="rounded-md border border-border p-3">
+   766→            <p className="flex items-center gap-1.5 text-xs font-medium">
+   767→              <CheckCircle2 className="h-3.5 w-3.5 text-ok" aria-hidden />
+   768→              {locale === "ar" ? "الدقة المقاسة (حد ويلسون الأدنى)" : "Measured precision (Wilson lower bound)"}
+   769→            </p>
+   770→            {d.measuredPrecision ? (
+   771→              <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
+   772→                <span className="font-mono text-xl font-semibold tabular-nums">
+   773→                  {iso(`${(d.measuredPrecision.lowerBound * 100).toFixed(1)}%`)}
+   774→                </span>
+   775→                <span className="text-xs text-muted-foreground">
+   776→                  {iso(`${d.measuredPrecision.confirmed}/${d.measuredPrecision.decided}`)}{" "}
+   777→                  {locale === "ar" ? "قرارات مؤكدة" : "confirmed decisions"}
+   778→                </span>
+   779→                <p className="w-full text-xs text-muted-foreground">{d.measuredPrecision.method}</p>
+   780→              </div>
+   781→            ) : (
+   782→              <p className="mt-1 text-xs text-muted-foreground">
+   783→                {locale === "ar" ? "لا توجد قرارات مُصنَّفة يدوياً بعد." : "No hand-labelled decisions yet."}
+   784→              </p>
+   785→            )}
+   786→          </div>
+   787→
+   788→          <div className="flex items-center gap-2 text-xs text-muted-foreground" role="note">
+   789→            <AlertTriangle className="h-3.5 w-3.5 text-sev-medium" aria-hidden />
+   790→            {iso(String(d.patternsSummary))}{" "}
+   791→            {locale === "ar" ? "تنبيهات أنماط استشارية في انتظار المراجعة" : "advisory pattern alerts awaiting review"}
+   792→          </div>
+   793→        </CardContent>
+   794→      </Card>
+   795→      </Reveal>
+   796→      </div>
+   797→    </>
+   798→  );
+   799→}
+   800→

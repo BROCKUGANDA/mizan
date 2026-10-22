@@ -20,6 +20,7 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyState, ErrorState, LoadingSkeleton, SeverityBadge } from "@/components/mizan/primitives";
 import { useI18n } from "@/lib/i18n/use-i18n";
+import { POLL } from "@/lib/app-config";
 import { api, ApiError, useAppStore, v1 } from "@/lib/client/store";
 import type { Severity } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
@@ -271,13 +272,13 @@ interface SystemStateLite {
 
 /** Time-aware greeting + Gregorian and Umm al-Qura Hijri dates (luxury, zero deps). */
 function GreetingHeader({ live }: { live: boolean }) {
-  const { locale } = useI18n();
+  const { t, locale } = useI18n();
   const actor = useAppStore((s) => s.actor);
   // Shares the shell's ["system-state", actor] cache — no extra polling.
   const { data: system } = useQuery<SystemStateLite>({
     queryKey: ["system-state", actor],
     queryFn: () => api<SystemStateLite>(v1("/system/state")),
-    staleTime: 10_000,
+    staleTime: POLL.staleMs.overview,
     refetchInterval: false,
   });
   const name = system?.actors.find((a) => a.id === actor)?.name ?? actor;
@@ -286,13 +287,13 @@ function GreetingHeader({ live }: { live: boolean }) {
   const greeting =
     locale === "ar"
       ? h < 12
-        ? "صباح الخير"
-        : "مساء الخير"
+        ? t("overview.greetingMorning")
+        : t("overview.greetingEvening")
       : h < 12
-        ? "Good morning"
+        ? t("overview.greetingMorning")
         : h < 17
-          ? "Good afternoon"
-          : "Good evening";
+          ? t("overview.greetingAfternoon")
+          : t("overview.greetingEvening");
   const gregorian = new Intl.DateTimeFormat(locale === "ar" ? "ar-AE" : "en-AE", {
     weekday: "long",
     day: "numeric",
@@ -332,7 +333,7 @@ function GreetingHeader({ live }: { live: boolean }) {
             role="status"
           >
             <span className="pulse-dot h-2 w-2 rounded-full bg-ok" aria-hidden />
-            {locale === "ar" ? "التعداد محدَّث" : "Census current"}
+            {t("overview.censusCurrent")}
           </span>
         ) : null}
       </div>
@@ -342,7 +343,7 @@ function GreetingHeader({ live }: { live: boolean }) {
 }
 
 export default function OverviewView() {
-  const { t, locale, iso } = useI18n();
+  const { t, iso } = useI18n();
   const setView = useAppStore((s) => s.setView);
   const setSelectedException = useAppStore((s) => s.setSelectedException);
   const qc = useQueryClient();
@@ -362,7 +363,7 @@ export default function OverviewView() {
     onSuccess: async (r) => {
       await qc.invalidateQueries();
       toast({
-        title: locale === "ar" ? "بدأ التشغيل" : "Run started",
+        title: t("overview.runStarted"),
         description: `${r.runId} · ${r.status}`,
       });
     },
@@ -418,10 +419,10 @@ export default function OverviewView() {
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <RunStateBadge status={census.status} />
                 <span>
-                  {locale === "ar" ? "كما في" : "as of"}{" "}
+                  {t("overview.asOf")}{" "}
                   <span className="font-mono">{iso(census.asOf)}</span>
                 </span>
-                <span className="inline-flex items-center gap-1" title={locale === "ar" ? "هاش المخرجات" : "Output hash (sha-256, truncated)"}>
+                <span className="inline-flex items-center gap-1" title={t("overview.outputHash")}>
                   <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
                   <span className="font-mono">{iso(census.outputHash.slice(0, 16))}</span>
                 </span>
@@ -435,12 +436,8 @@ export default function OverviewView() {
           ) : !census ? (
             <div className="flex flex-col items-center gap-4">
               <EmptyState
-                title={locale === "ar" ? "لا يوجد تعداد بعد" : "No census yet"}
-                hint={
-                  locale === "ar"
-                    ? "ابدأ التشغيل الأول لتحليل كل معاملة مقابل كل قاعدة نشطة وإنتاج التعداد الكامل (FS-02)."
-                    : "Start the first run to evaluate every transaction against every active rule and produce the full census (FS-02)."
-                }
+                title={t("overview.noCensus.title")}
+                hint={t("overview.noCensus.hint")}
                 icon={<Play className="h-8 w-8" aria-hidden />}
               />
               <Button onClick={() => startMut.mutate()} aria-label={t("common.startRun")} className="active-press">
@@ -451,45 +448,45 @@ export default function OverviewView() {
           ) : (
             <>
               {/* Reconciliation sentence */}
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm" role="group" aria-label={locale === "ar" ? "معادلة التعداد" : "Census reconciliation"}>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm" role="group" aria-label={t("overview.censusReconciliation")}>
                 <AnimatedNum value={census.transactions ?? 0} />
-                <span className="text-muted-foreground">{locale === "ar" ? "معاملة" : "transactions"}</span>
+                <span className="text-muted-foreground">{t("overview.transactions")}</span>
                 <span className="text-muted-foreground" aria-hidden>×</span>
                 <AnimatedNum value={census.rules ?? 0} />
-                <span className="text-muted-foreground">{locale === "ar" ? "قاعدة" : "rules"}</span>
+                <span className="text-muted-foreground">{t("overview.rules")}</span>
                 <span className="text-muted-foreground" aria-hidden>=</span>
                 <AnimatedNum value={census.checks ?? 0} />
-                <span className="text-muted-foreground">{locale === "ar" ? "فحص" : "checks"}</span>
+                <span className="text-muted-foreground">{t("overview.checks")}</span>
                 <span className="text-muted-foreground" aria-hidden>·</span>
                 <AnimatedNum value={census.applicable ?? 0} />
-                <span className="text-muted-foreground">{locale === "ar" ? "منطبق" : "applicable"}</span>
+                <span className="text-muted-foreground">{t("overview.applicable")}</span>
                 <span className="text-muted-foreground" aria-hidden>·</span>
                 <AnimatedNum value={census.evaluated ?? 0} />
-                <span className="text-muted-foreground">{locale === "ar" ? "مُقيَّم" : "evaluated"}</span>
+                <span className="text-muted-foreground">{t("overview.evaluated")}</span>
                 <span className="text-muted-foreground" aria-hidden>·</span>
                 <AnimatedNum value={census.notEvaluable ?? 0} />
-                <span className="text-muted-foreground">{locale === "ar" ? "غير قابل للتقييم" : "not evaluable"}</span>
+                <span className="text-muted-foreground">{t("overview.notEvaluable")}</span>
                 <span className="text-muted-foreground" aria-hidden>·</span>
                 <AnimatedNum value={census.failed ?? 0} />
-                <span className="text-muted-foreground">{locale === "ar" ? "فشل" : "failed"}</span>
+                <span className="text-muted-foreground">{t("overview.failed")}</span>
               </div>
 
               {/* Secondary census stats */}
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1.5">
-                  {locale === "ar" ? "ناجح" : "passed"} <Num value={census.passed ?? 0} />
+                  {t("overview.passed")} <Num value={census.passed ?? 0} />
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  {locale === "ar" ? "غير منطبق" : "not applicable"} <Num value={census.notApplicable ?? 0} />
+                  {t("overview.notApplicable")} <Num value={census.notApplicable ?? 0} />
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  {locale === "ar" ? "محجور" : "quarantined"} <Num value={census.quarantined ?? 0} />
+                  {t("overview.quarantined")} <Num value={census.quarantined ?? 0} />
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  {locale === "ar" ? "محتجز" : "held"} <Num value={census.held ?? 0} />
+                  {t("overview.held")} <Num value={census.held ?? 0} />
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  {locale === "ar" ? "استثناءات جودة بيانات" : "data-quality exceptions"} <Num value={census.dqExceptions ?? 0} />
+                  {t("overview.dqExceptions")} <Num value={census.dqExceptions ?? 0} />
                 </span>
               </div>
 
@@ -500,7 +497,7 @@ export default function OverviewView() {
                     <Alert key={`${h.kind}-${h.ruleId ?? i}`} className="border-hold/40 bg-hold/10 text-foreground">
                       <PauseCircle className="h-4 w-4 text-hold" aria-hidden />
                       <AlertTitle>
-                        {locale === "ar" ? "احتجاز" : "Hold"} · {h.kind}
+                        {t("overview.hold")} · {h.kind}
                         {h.ruleId ? ` · ${h.ruleId}` : ""}
                       </AlertTitle>
                       <AlertDescription>{h.reason}</AlertDescription>
@@ -526,15 +523,11 @@ export default function OverviewView() {
             <div className="min-w-0">
               <p className="text-sm font-medium">
                 {readiness.total >= 80
-                  ? locale === "ar"
-                    ? "جاهز للتدقيق"
-                    : "Audit ready"
-                  : locale === "ar"
-                    ? "قيد التحصين"
-                    : "Hardening in progress"}
+                  ? t("overview.auditReady")
+                  : t("overview.hardening")}
               </p>
               <p className="text-xs text-muted-foreground">
-                {locale === "ar" ? "الدرجة المركّبة من " : "Composite score out of "}
+                {t("overview.compositeScore")}
                 {iso("100")}
               </p>
             </div>
@@ -547,7 +540,7 @@ export default function OverviewView() {
                   <span className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span className="font-mono tabular-nums">{iso(String(Math.round(c.score * 100)))}%</span>
                     <span aria-hidden>·</span>
-                    <span>{locale === "ar" ? "وزن" : "w"} {iso(String(c.weight))}</span>
+                    <span>{t("overview.weight")} {iso(String(c.weight))}</span>
                   </span>
                 </div>
                 <Progress value={Math.round(c.score * 100)} aria-label={`${c.label}: ${Math.round(c.score * 100)}%`} />
@@ -556,7 +549,7 @@ export default function OverviewView() {
             ))}
           </div>
           <div className="rounded-md border border-brand/30 bg-brand/5 p-3" role="note">
-            <p className="text-xs font-medium text-brand">{locale === "ar" ? "أفضل إجراء تالٍ" : "Next best action"}</p>
+            <p className="text-xs font-medium text-brand">{t("overview.nextBestAction")}</p>
             <p className="mt-1 text-sm">{readiness.nextBestAction}</p>
           </div>
         </CardContent>
@@ -567,7 +560,7 @@ export default function OverviewView() {
       <Reveal index={2}>
       <Card className="lux-card">
         <CardHeader className="pb-0">
-          <SectionTitle>{locale === "ar" ? "المفتوحة حسب الخطورة" : "Open by severity"}</SectionTitle>
+          <SectionTitle>{t("overview.openBySeverity")}</SectionTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {SEVERITIES.map((s) => (
@@ -577,11 +570,11 @@ export default function OverviewView() {
             </div>
           ))}
           <div className="flex items-center justify-between gap-2 border-t pt-3 text-sm">
-            <span className="text-muted-foreground">{locale === "ar" ? "إجمالي المفتوحة" : "Open total"}</span>
+            <span className="text-muted-foreground">{t("overview.openTotal")}</span>
             <AnimatedNum value={d.counts.open ?? 0} variant="plain" />
           </div>
           <div className="flex items-center justify-between gap-2 text-sm">
-            <span className="text-muted-foreground">{locale === "ar" ? "كل الاستثناءات" : "All exceptions"}</span>
+            <span className="text-muted-foreground">{t("overview.allExceptions")}</span>
             <AnimatedNum value={d.counts.total ?? 0} variant="plain" />
           </div>
         </CardContent>
@@ -597,18 +590,18 @@ export default function OverviewView() {
         <CardContent>
           {d.hotspots.length === 0 ? (
             <EmptyState
-              title={locale === "ar" ? "لا توجد بؤر ساخنة" : "No hotspots"}
-              hint={locale === "ar" ? "ستظهر العمليات × القواعد هنا بعد التشغيل الأول." : "Process × rule cells appear here after the first run."}
+              title={t("overview.noHotspots.title")}
+              hint={t("overview.noHotspots.hint")}
             />
           ) : (
             <div className="max-h-72 overflow-y-auto" role="region" aria-label={t("overview.hotspots")}>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead scope="col">{locale === "ar" ? "العملية" : "Process"}</TableHead>
-                    <TableHead scope="col">{locale === "ar" ? "القاعدة" : "Rule"}</TableHead>
-                    <TableHead scope="col" className="text-end">{locale === "ar" ? "العدد" : "Count"}</TableHead>
-                    <TableHead scope="col" className="text-end">{locale === "ar" ? "لكل ١٠٠٠" : "Per 1,000"}</TableHead>
+                    <TableHead scope="col">{t("overview.process")}</TableHead>
+                    <TableHead scope="col">{t("overview.rule")}</TableHead>
+                    <TableHead scope="col" className="text-end">{t("overview.count")}</TableHead>
+                    <TableHead scope="col" className="text-end">{t("overview.per1000")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -656,11 +649,11 @@ export default function OverviewView() {
         <CardContent>
           {d.trends.length === 0 ? (
             <EmptyState
-              title={locale === "ar" ? "لا توجد بيانات اتجاهات" : "No trend data"}
-              hint={locale === "ar" ? "تظهر الاتجاهات الشهرية بعد أول تشغيل." : "Monthly trend appears after the first run."}
+              title={t("overview.noTrends.title")}
+              hint={t("overview.noTrends.hint")}
             />
           ) : (
-            <div className="flex items-end gap-4 overflow-x-auto pb-1" role="img" aria-label={locale === "ar" ? "استثناءات لكل شهر حسب الخطورة" : "Exceptions per month by severity"}>
+            <div className="flex items-end gap-4 overflow-x-auto pb-1" role="img" aria-label={t("overview.trendsAria")}>
               {d.trends.map((p) => (
                 <div key={p.month} className="flex min-w-14 flex-col items-center gap-1">
                   <div
@@ -695,18 +688,18 @@ export default function OverviewView() {
       <Card className="lux-card">
         <CardHeader className="pb-0">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <SectionTitle>{locale === "ar" ? "أكبر المجموعات" : "Top groups"}</SectionTitle>
-            <span className="text-xs text-muted-foreground">{locale === "ar" ? "اضغط للانتقال إلى القائمة" : "click to open the queue"}</span>
+            <SectionTitle>{t("overview.topGroups")}</SectionTitle>
+            <span className="text-xs text-muted-foreground">{t("overview.topGroupsHint")}</span>
           </div>
         </CardHeader>
         <CardContent>
           {d.topGroups.length === 0 ? (
             <EmptyState
-              title={locale === "ar" ? "لا توجد مجموعات" : "No groups yet"}
-              hint={locale === "ar" ? "تُجمَّع الاستثناءات المتشابهة تلقائياً بعد التشغيل." : "Similar exceptions are grouped automatically after a run."}
+              title={t("overview.noGroups.title")}
+              hint={t("overview.noGroups.hint")}
             />
           ) : (
-            <div className="max-h-64 space-y-1 overflow-y-auto" role="list" aria-label={locale === "ar" ? "أكبر المجموعات" : "Top groups"}>
+            <div className="max-h-64 space-y-1 overflow-y-auto" role="list" aria-label={t("overview.topGroups")}>
               {d.topGroups.map((g) => (
                 <button
                   key={g.groupKey}
@@ -740,16 +733,16 @@ export default function OverviewView() {
           <div className="flex flex-wrap items-baseline gap-2">
             <AnimatedNum value={d.coverage.total} variant="plain" className="text-2xl font-bold" durationMs={1200} />
             <span className="text-sm text-muted-foreground">
-              {locale === "ar" ? "جملة مصنَّفة — كل قاعدة مكتوبة محسوبة" : "sentences classified — every written rule accounted for"}
+              {t("overview.sentencesClassified")}
             </span>
           </div>
           <div className="grid grid-cols-2 gap-3">
             {(
               [
-                { key: "compiled", label: locale === "ar" ? "مُجمَّعة (فحوص)" : "Compiled checks", items: d.coverage.compiled },
-                { key: "definitions", label: locale === "ar" ? "تعريفات" : "Definitions", items: d.coverage.definitions },
-                { key: "attestations", label: locale === "ar" ? "إقرارات بشرية" : "Human attestations", items: d.coverage.attestations },
-                { key: "scopeNotes", label: locale === "ar" ? "ملاحظات نطاق" : "Scope notes", items: d.coverage.scopeNotes },
+                { key: "compiled", label: t("overview.compiledChecks"), items: d.coverage.compiled },
+                { key: "definitions", label: t("overview.definitions"), items: d.coverage.definitions },
+                { key: "attestations", label: t("overview.attestations"), items: d.coverage.attestations },
+                { key: "scopeNotes", label: t("overview.scopeNotes"), items: d.coverage.scopeNotes },
               ] as const
             ).map((row) => (
               <div key={row.key} className="rounded-md border border-border bg-secondary/50 p-3">
@@ -765,7 +758,7 @@ export default function OverviewView() {
           <div className="rounded-md border border-border p-3">
             <p className="flex items-center gap-1.5 text-xs font-medium">
               <CheckCircle2 className="h-3.5 w-3.5 text-ok" aria-hidden />
-              {locale === "ar" ? "الدقة المقاسة (حد ويلسون الأدنى)" : "Measured precision (Wilson lower bound)"}
+              {t("overview.measuredPrecision")}
             </p>
             {d.measuredPrecision ? (
               <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
@@ -774,13 +767,13 @@ export default function OverviewView() {
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {iso(`${d.measuredPrecision.confirmed}/${d.measuredPrecision.decided}`)}{" "}
-                  {locale === "ar" ? "قرارات مؤكدة" : "confirmed decisions"}
+                  {t("overview.confirmedDecisions")}
                 </span>
                 <p className="w-full text-xs text-muted-foreground">{d.measuredPrecision.method}</p>
               </div>
             ) : (
               <p className="mt-1 text-xs text-muted-foreground">
-                {locale === "ar" ? "لا توجد قرارات مُصنَّفة يدوياً بعد." : "No hand-labelled decisions yet."}
+                {t("overview.noDecisions")}
               </p>
             )}
           </div>
@@ -788,7 +781,7 @@ export default function OverviewView() {
           <div className="flex items-center gap-2 text-xs text-muted-foreground" role="note">
             <AlertTriangle className="h-3.5 w-3.5 text-sev-medium" aria-hidden />
             {iso(String(d.patternsSummary))}{" "}
-            {locale === "ar" ? "تنبيهات أنماط استشارية في انتظار المراجعة" : "advisory pattern alerts awaiting review"}
+            {t("overview.patternAlerts")}
           </div>
         </CardContent>
       </Card>

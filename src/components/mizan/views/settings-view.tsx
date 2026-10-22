@@ -37,6 +37,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { EmptyState, ErrorState, LoadingSkeleton, ModeChip } from "@/components/mizan/primitives";
 import { api, v1, useAppStore, ApiError } from "@/lib/client/store";
 import { useI18n } from "@/lib/i18n/use-i18n";
+import { POLL } from "@/lib/app-config";
 import { cn } from "@/lib/utils";
 
 /* ── payload mirrors ────────────────────────────────────────────────────────── */
@@ -163,7 +164,7 @@ function useRole(): string | null {
   const { data } = useQuery<SystemState>({
     queryKey: ["system-state", actor],
     queryFn: () => api<SystemState>(v1("/system/state")),
-    staleTime: 30_000,
+    staleTime: POLL.staleMs.settings,
   });
   return data?.actors.find((a) => a.id === actor)?.role ?? null;
 }

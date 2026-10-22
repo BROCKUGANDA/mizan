@@ -6,8 +6,12 @@
  */
 
 import { create } from "zustand";
+import { DEFAULT_ACTOR } from "@/lib/app-config";
 
 export type ViewKey = "overview" | "queue" | "runs" | "rules" | "patterns" | "audit" | "integrations" | "settings";
+
+/** Canonical view order — the one place the shell nav and command palette read. */
+export const VIEW_KEYS: ViewKey[] = ["overview", "queue", "runs", "rules", "patterns", "audit", "integrations", "settings"];
 
 export interface AppState {
   view: ViewKey;
@@ -29,7 +33,7 @@ export interface AppState {
 export const useAppStore = create<AppState>((set) => ({
   view: "overview",
   setView: (view) => set({ view }),
-  actor: "analyst-a",
+  actor: DEFAULT_ACTOR,
   setActor: (actor) => set({ actor }),
   selectedExceptionKey: null,
   setSelectedException: (selectedExceptionKey) => set({ selectedExceptionKey }),

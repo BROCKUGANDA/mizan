@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState } from "react";
 import { ThemeProvider as NextThemesProvider, useTheme } from "next-themes";
+import { STORAGE_KEYS } from "@/lib/app-config";
 
 /**
  * Theme provider (next-themes) + projector theme toggle (§15) + accent packs
@@ -44,8 +45,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const { setTheme } = useTheme();
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("mizan-theme") as ThemeMode | null;
-    const savedAccent = window.localStorage.getItem("mizan-accent") as Accent | null;
+    const saved = window.localStorage.getItem(STORAGE_KEYS.theme) as ThemeMode | null;
+    const savedAccent = window.localStorage.getItem(STORAGE_KEYS.accent) as Accent | null;
     queueMicrotask(() => {
       if (saved) {
         setMode(saved);
@@ -61,13 +62,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const switchMode = (m: ThemeMode) => {
     setMode(m);
     applyMode(m, setTheme);
-    window.localStorage.setItem("mizan-theme", m);
+    window.localStorage.setItem(STORAGE_KEYS.theme, m);
   };
 
   const switchAccent = (a: Accent) => {
     setAccent(a);
     applyAccent(a);
-    window.localStorage.setItem("mizan-accent", a);
+    window.localStorage.setItem(STORAGE_KEYS.accent, a);
   };
 
   return <Ctx.Provider value={{ mode, setMode: switchMode, accent, setAccent: switchAccent }}>{children}</Ctx.Provider>;

@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from "@/components/ui/command";
-import { useAppStore, api, v1, type ViewKey } from "@/lib/client/store";
+import { useAppStore, api, v1, VIEW_KEYS, type ViewKey } from "@/lib/client/store";
+import { EVENTS } from "@/lib/app-config";
 import { useI18n } from "@/lib/i18n/use-i18n";
 import { useMizanTheme, ACCENTS, type Accent } from "@/components/mizan/theme-provider";
 import { useQuery } from "@tanstack/react-query";
@@ -11,7 +12,7 @@ interface ExceptionsList { items: { exceptionKey: string; displayId: string; hea
 
 /** ⌘K command palette: navigate, switch theme/accent, jump to exceptions. */
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const { setView, setSelectedException } = useAppStore();
   const { mode, setMode, accent, setAccent } = useMizanTheme();
 
@@ -28,11 +29,11 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange}>
-      <CommandInput placeholder={locale === "ar" ? "ابحث عن وجهة أو استثناء…" : "Search views or exceptions…"} />
+      <CommandInput placeholder={t("palette.placeholder")} />
       <CommandList>
-        <CommandEmpty>{locale === "ar" ? "لا نتائج" : "No results"}</CommandEmpty>
-        <CommandGroup heading={locale === "ar" ? "التنقل" : "Go to"}>
-          {(["overview", "queue", "runs", "rules", "patterns", "audit", "integrations", "settings"] as ViewKey[]).map((v) => (
+        <CommandEmpty>{t("palette.empty")}</CommandEmpty>
+        <CommandGroup heading={t("palette.goto")}>
+          {VIEW_KEYS.map((v) => (
             <CommandItem key={v} onSelect={() => go(v)}>
               {t(`nav.${v}`)}
             </CommandItem>
@@ -62,7 +63,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           ))}
         </CommandGroup>
         {data?.items?.length ? (
-          <CommandGroup heading={locale === "ar" ? "استثناءات" : "Exceptions"}>
+          <CommandGroup heading={t("palette.exceptions")}>
             {data.items.map((e) => (
               <CommandItem
                 key={e.exceptionKey}
@@ -87,8 +88,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
 export function useKeyboardListNav(refresh: () => void): void {
   useEffect(() => {
     const handler = (): void => refresh();
-    window.addEventListener("mizan-queue-nav", handler);
-    return () => window.removeEventListener("mizan-queue-nav", handler);
+    window.addEventListener(EVENTS.queueNav, handler);
+    return () => window.removeEventListener(EVENTS.queueNav, handler);
   }, [refresh]);
 }
 

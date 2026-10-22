@@ -7,24 +7,48 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { SeverityBadge } from "@/components/mizan/primitives";
 import { api, v1, useAppStore } from "@/lib/client/store";
 import { useI18n } from "@/lib/i18n/use-i18n";
+import { POLL } from "@/lib/app-config";
 import { useEffect, useState } from "react";
 
 interface Notifications {
   items: { id: string; at: string; exceptionKey: string | null; team: string | null; severity: string | null; headline: string; event: string | null }[];
 }
 
+/** Relative timestamp via Intl (locale-aware; falls back silently offline). */
+const rtfCache = new Map<string, Intl.RelativeTimeFormat>();
+function relativeTime(at: string, locale: string): string {
+  try {
+    let rtf = rtfCache.get(locale);
+    if (!rtf) {
+      rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+      rtfCache.set(locale, rtf);
+    }
+    const diffMs = new Date(at).getTime() - Date.now();
+    const minutes = diffMs / 60_000;
+    if (Math.abs(minutes) < 1) return rtf.format(Math.round(diffMs / 1_000), "second");
+    if (Math.abs(minutes) < 60) return rtf.format(Math.round(minutes), "minute");
+    const hours = minutes / 60;
+    if (Math.abs(hours) < 24) return rtf.format(Math.round(hours), "hour");
+    return rtf.format(Math.round(hours / 24), "day");
+  } catch {
+    return "";
+  }
+}
+
 /**
  * In-app notification centre (in-app first, §14). Digest note: more than 10
  * notifications for one owner within 15 minutes are grouped server-side.
+ * The unread badge is a polite live region; the list scrolls inside a clipped
+ * ScrollArea and every item closes the panel (predictable dismissal).
  */
 export function NotificationPanel({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { locale, iso } = useI18n();
+  const { t, iso, locale } = useI18n();
   const { setSelectedException, setView } = useAppStore();
   const [seen, setSeen] = useState(0);
-  const { data } = useQuery<Notifications>({
+  const { data, isLoading } = useQuery<Notifications>({
     queryKey: ["notifications"],
     queryFn: () => api<Notifications>(v1("/notifications")),
-    refetchInterval: 8_000,
+    refetchInterval: POLL.notificationsMs,
   });
 
   const count = data?.items.length ?? 0;
@@ -35,22 +59,28 @@ export function NotificationPanel({ open, onOpenChange }: { open: boolean; onOpe
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
-        <button className="relative rounded-md p-2 hover:bg-secondary" aria-label={locale === "ar" ? "الإشعارات" : "Notifications"}>
+        <button className="relative rounded-md p-2 hover:bg-secondary" aria-label={t("app.notifications")}>
           <Bell className="h-4 w-4" aria-hidden />
           {count - seen > 0 ? (
-            <span className="absolute -end-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-bold text-primary-foreground">
+            <span role="status" aria-live="polite" className="absolute -end-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-bold text-primary-foreground">
               {iso(String(count - seen))}
             </span>
           ) : null}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-96 p-0">
+      <PopoverContent align="end" className="w-96 max-w-[calc(100vw-2rem)] p-0">
         <ScrollArea className="max-h-96">
-          <div className="border-b px-3 py-2 text-sm font-medium">{locale === "ar" ? "الإشعارات" : "Notifications"}</div>
-          {!data?.items.length ? (
+          <div className="border-b px-3 py-2 text-sm font-medium">{t("app.notifications")}</div>
+          {isLoading ? (
+            <div className="space-y-2 p-3" aria-hidden>
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="mizan-skeleton h-10 rounded-md" />
+              ))}
+            </div>
+          ) : !data?.items.length ? (
             <div className="flex flex-col items-center gap-2 px-4 py-8 text-center text-xs text-muted-foreground">
               <Inbox className="h-6 w-6" aria-hidden />
-              {locale === "ar" ? "لا إشعارات بعد" : "Nothing here yet"}
+              {t("notifications.empty")}
             </div>
           ) : (
             data.items.map((n) => (
@@ -61,14 +91,16 @@ export function NotificationPanel({ open, onOpenChange }: { open: boolean; onOpe
                   if (n.exceptionKey) {
                     setSelectedException(n.exceptionKey);
                     setView("queue");
-                    onOpenChange(false);
                   }
+                  onOpenChange(false);
                 }}
               >
                 {n.severity ? <SeverityBadge severity={n.severity as never} /> : null}
                 <span className="flex-1">
                   <span className="line-clamp-2">{n.headline}</span>
-                  <span className="block text-[10px] text-muted-foreground">{n.team ?? n.event ?? ""}</span>
+                  <span className="block text-[10px] text-muted-foreground">
+                    {n.team ?? n.event ?? ""}{n.team || n.event ? " · " : ""}{relativeTime(n.at, locale)}
+                  </span>
                 </span>
               </button>
             ))

@@ -125,7 +125,7 @@ export default function AuditView() {
             <CircleCheck className="h-4 w-4 text-ok" aria-hidden />
             <AlertTitle>Hash chain verified — {iso(String(verification.checked))} events, head {verification.headHash?.slice(0, 8) ?? "—"}</AlertTitle>
             <AlertDescription>
-              Every event hashes to the previous one; the head hash is what an offline verifier ({locale === "ar" ? "mizan audit verify" : "`mizan audit verify`"}) reproduces. Verified {new Date(verification.verifiedAt).toLocaleTimeString(locale === "ar" ? "ar-AE" : "en-GB")}.
+              Every event hashes to the previous one; the head hash is what an offline verifier ({t("audit.verifyCommand")}) reproduces. Verified {new Date(verification.verifiedAt).toLocaleTimeString(locale === "ar" ? "ar-AE" : "en-GB")}.
             </AlertDescription>
           </Alert>
         ) : (

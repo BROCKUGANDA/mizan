@@ -13,12 +13,18 @@ function ScrollArea({
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
-      className={cn("relative", className)}
+      // overflow-hidden is load-bearing: without it any max-h usage (e.g. the
+      // notifications popover) lets unclipped content paint over the page.
+      className={cn("relative overflow-hidden", className)}
       {...props}
     >
       <ScrollAreaPrimitive.Viewport
         data-slot="scroll-area-viewport"
-        className="focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
+        // max-height:inherit lets the viewport see a root `max-h-*` constraint
+        // (height:100% alone resolves against the auto-height root), so Radix
+        // detects real overflow, shows the scrollbar and scrolls instead of
+        // silently growing the viewport past the cap.
+        className="focus-visible:ring-ring/50 size-full rounded-[inherit] [max-height:inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1"
       >
         {children}
       </ScrollAreaPrimitive.Viewport>

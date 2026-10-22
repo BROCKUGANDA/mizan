@@ -23,9 +23,10 @@ import { NotificationPanel } from "@/components/mizan/notification-panel";
 import { ShortcutsDialog } from "@/components/mizan/shortcuts-dialog";
 import { ExceptionDrawer } from "@/components/mizan/views/exception-drawer";
 import { ModeChip, ModeBanner, JudgeRibbon } from "@/components/mizan/primitives";
-import { useAppStore, api, v1, type ViewKey } from "@/lib/client/store";
+import { useAppStore, api, v1, VIEW_KEYS, type ViewKey } from "@/lib/client/store";
 import { useI18n, I18nProvider } from "@/lib/i18n/use-i18n";
 import { useMizanTheme, ACCENTS, type Accent } from "@/components/mizan/theme-provider";
+import { BUILD_LINE, EVENTS, POLL, STORAGE_KEYS } from "@/lib/app-config";
 
 interface SystemState {
   mode: { current: string; label: string; labelAr: string; banner: string; bannerAr: string; reason: string | null; operator: string | null };
@@ -34,18 +35,10 @@ interface SystemState {
   actors: { id: string; name: string; role: string }[];
 }
 
-const NAV: { key: ViewKey; labelKey: string }[] = [
-  { key: "overview", labelKey: "nav.overview" },
-  { key: "queue", labelKey: "nav.queue" },
-  { key: "runs", labelKey: "nav.runs" },
-  { key: "rules", labelKey: "nav.rules" },
-  { key: "patterns", labelKey: "nav.patterns" },
-  { key: "audit", labelKey: "nav.audit" },
-  { key: "integrations", labelKey: "nav.integrations" },
-  { key: "settings", labelKey: "nav.settings" },
-];
+/* Nav derives from the canonical VIEW_KEYS — the same list the command palette reads. */
+const NAV: { key: ViewKey; labelKey: string }[] = VIEW_KEYS.map((key) => ({ key, labelKey: `nav.${key}` }));
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: 1 } } });
+const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: POLL.queryStaleMs, retry: POLL.queryRetry } } });
 
 export default function Home() {
   return (
@@ -71,7 +64,7 @@ function Shell() {
   const dismissKbdHint = useCallback(() => {
     setKbdHint(false);
     try {
-      localStorage.setItem("mizan.kbd-hint", "1");
+      localStorage.setItem(STORAGE_KEYS.kbdHint, "1");
     } catch {
       // storage unavailable (private mode) — hint just won't persist
     }
@@ -79,9 +72,9 @@ function Shell() {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (!localStorage.getItem("mizan.kbd-hint")) {
+      if (!localStorage.getItem(STORAGE_KEYS.kbdHint)) {
         setKbdHint(true);
-        timer = setTimeout(dismissKbdHint, 12_000);
+        timer = setTimeout(dismissKbdHint, POLL.kbdHintDismissMs);
       }
     } catch {
       // storage unavailable — skip the hint entirely
@@ -97,7 +90,7 @@ function Shell() {
   const { data: system } = useQuery<SystemState>({
     queryKey: ["system-state", actor],
     queryFn: () => api<SystemState>(v1("/system/state")),
-    refetchInterval: 10_000,
+    refetchInterval: POLL.systemStateMs,
   });
 
   const mode = system?.mode.current ?? "M0";
@@ -119,7 +112,7 @@ function Shell() {
       }
       if ((e.key === "j" || e.key === "k") && view === "queue") {
         // queue view handles J/K via its own listener bound to the store index
-        window.dispatchEvent(new CustomEvent("mizan-queue-nav", { detail: { dir: e.key === "j" ? 1 : -1 } }));
+        window.dispatchEvent(new CustomEvent(EVENTS.queueNav, { detail: { dir: e.key === "j" ? 1 : -1 } }));
       }
       if (e.key === "Escape") {
         setSelectedException(null);
@@ -137,9 +130,9 @@ function Shell() {
     try {
       const r = await api<{ ok: boolean; elapsedMs: number }>(v1("/judge/reset"), { method: "POST", body: {} });
       await queryClient_.invalidateQueries();
-      toast({ title: locale === "ar" ? "تمت إعادة التعيين" : "Reset complete", description: iso(`${(r.elapsedMs / 1000).toFixed(1)}s`) });
+      toast({ title: t("common.resetComplete"), description: iso(`${(r.elapsedMs / 1000).toFixed(1)}s`) });
     } catch (err) {
-      toast({ title: t("common.error"), description: err instanceof Error ? err.message : "reset failed", variant: "destructive" });
+      toast({ title: t("common.error"), description: err instanceof Error ? err.message : t("common.error"), variant: "destructive" });
     } finally {
       setResetting(false);
     }
@@ -148,7 +141,7 @@ function Shell() {
   return (
     <div className="flex min-h-screen flex-col">
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground">
-        {locale === "ar" ? "تخطَّ إلى المحتوى" : "Skip to content"}
+        {t("app.skipToContent")}
       </a>
 
       <div className="sadu-strip" aria-hidden />
@@ -166,7 +159,7 @@ function Shell() {
           </div>
 
           {system?.profile === "judge" ? (
-            <JudgeRibbon label={locale === "ar" ? "وضع المُقيِّم" : "Judge mode"} />
+            <JudgeRibbon label={t("mode.judge")} />
           ) : null}
           {system?.syntheticOnly ? (
             <span className="hidden shrink-0 rounded-full border border-border bg-secondary px-2 py-0.5 text-[10px] text-muted-foreground lg:inline">
@@ -207,7 +200,7 @@ function Shell() {
                   role="note"
                 >
                   <kbd className="me-1 rounded border border-border bg-secondary px-1 font-mono text-[10px]">⌘K</kbd>
-                  {locale === "ar" ? "للوصول السريع إلى كل شيء" : "for anything, instantly"}
+                  {t("app.kbdHint")}
                 </div>
               ) : null}
             </div>
@@ -224,7 +217,7 @@ function Shell() {
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="theme">
+                <Button variant="ghost" size="icon" aria-label={t("app.themeMenu")}>
                   {themeMode === "dark" ? <Moon className="h-4 w-4" /> : themeMode === "projector" ? <Monitor className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
                 </Button>
               </DropdownMenuTrigger>
@@ -268,12 +261,12 @@ function Shell() {
             ) : null}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="secondary" size="sm" className="min-w-32" aria-label={`actor: ${actor}`}>
+                <Button variant="secondary" size="sm" className="min-w-32" aria-label={`${t("app.roleSwitcher")}: ${actor}`}>
                   <span className="truncate">{system?.actors.find((a) => a.id === actor)?.name ?? actor}</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
-                <DropdownMenuLabel>{locale === "ar" ? "تبديل الدور" : "Role switcher"}</DropdownMenuLabel>
+                <DropdownMenuLabel>{t("app.roleSwitcher")}</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {(system?.actors ?? []).map((a) => (
                   <DropdownMenuItem key={a.id} onClick={() => setActor(a.id)} className={a.id === actor ? "bg-accent" : ""}>
@@ -332,7 +325,7 @@ function Shell() {
       <footer className="mt-auto border-t bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]">
         <div className="sadu-strip-fine" aria-hidden />
         <p className="py-3 text-center text-xs text-muted-foreground">
-          {iso("MIZAN v1.0 · engine-1.0.0 · pack emirates-hr-1.0.0 · synthetic data only · the engine decides, the model explains")}
+          {iso(BUILD_LINE)} · {t("app.footer.principles")}
         </p>
       </footer>
 

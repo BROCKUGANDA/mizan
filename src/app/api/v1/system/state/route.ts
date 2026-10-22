@@ -1,6 +1,7 @@
 import { withApiRoute, json } from "@/lib/server/api";
 import { getMode, MODE_META } from "@/lib/server/mode";
 import { db } from "@/lib/db";
+import { DEFAULT_ACTOR } from "@/lib/app-config";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,7 @@ export const GET = withApiRoute(async ({ req }) => {
     syntheticOnly: true,
     flags: flags.filter((f) => f.key !== "backtest.baselines").map((f) => ({ key: f.key, value: f.value, updatedBy: f.updatedBy, reason: f.reason, updatedAt: f.updatedAt })),
     actors: actors.map((a) => ({ id: a.id, name: a.name, role: a.role })),
-    currentActor: req.headers.get("x-mizan-actor") ?? "analyst-a",
+    currentActor: req.headers.get("x-mizan-actor") ?? DEFAULT_ACTOR,
     latestRunId: latestRun?.id ?? null,
   });
 });

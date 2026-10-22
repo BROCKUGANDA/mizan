@@ -191,3 +191,43 @@ Stage Summary:
 - Overview now lands the "production-luxury" first impression: personal greeting + Hijri calendar, living numbers, gold-crowned depth cards, readiness ring, staggered reveals, ⌘K empowerment hint.
 - Red lines untouched: synthetic-only chip intact, decisions remain human-in-the-loop (drawer untouched functionally), no model involvement.
 - Hook is reusable: useCountUpText can animate any future numeric surface (queue counters, runs view) with one line.
+
+---
+Task ID: PROD-5
+Agent: general-purpose (i18n migration)
+Task: Migrate hardcoded bilingual copy in view components to the i18n catalog (MESSAGES) + wire polling/event constants from app-config.
+
+Work Log:
+- src/lib/i18n/use-i18n.tsx: appended 99 namespaced keys to MESSAGES (53 overview.*, 45 runs.*, 1 audit.verifyCommand), EN/AR copied character-for-character from the inline ternaries. No existing keys renamed or reused with different text.
+- overview-view.tsx: 52 copy ternaries migrated to t() (greeting leaves, census-current chip, toast, as-of/output-hash, no-census empty state + hint, reconciliation aria + all 12 census unit labels, hold alert title, audit-ready/hardening, composite-score prefix, weight, next-best-action, open-by-severity card (title/totals), hotspots empty state + 4 column heads, trends empty state + aria, top-groups card (title/hint/aria + empty state), coverage card (sentences-classified, 4 tile labels, Wilson precision block ×3, patterns-summary line)). GreetingHeader destructures { t, locale } (locale kept for Intl date formatters); OverviewView destructure slimmed to { t, iso }. staleTime: 10_000 → POLL.staleMs.overview (refetchInterval: false untouched — not a number literal).
+- runs-view.tsx: 45 copy ternaries migrated to t() (toast, start-new header + hint, kind select aria + 3 options, as-of aria, live-strip checks label, empty history title/hint, history row labels (as-of/failed/not-evaluable/held/hold(s)/started), run-detail header/as-of/manifest, holds alert title, per-rule matrix title/empty/aria + 6 column heads, export panel (title, locked note, validator-passed AlertTitle split into runs.validatorPassedPrefix + iso(count) + runs.validatorPassedSuffix, profile, findings sha, validator-failed title, 4 mismatch column heads, findings/dq download aria-labels incl. disabled variant, select-run empty state). staleTime: 60_000 → POLL.staleMs.runs.
+- queue-view.tsx: no copy ternaries existed (the 3 `locale === "ar"` hits are the L() helper definition + two server-data field selects). Wired staleTime: 15_000 → POLL.staleMs.queue and both "mizan-queue-nav" add/removeEventListener literals → EVENTS.queueNav (comments mentioning the event name left intact).
+- rules-view.tsx: no copy ternaries (Intl formatter + server-data notes select). staleTime: 30_000 → POLL.staleMs.rules.
+- settings-view.tsx: no copy ternaries (Intl formatter + local MODE_INFO bilingual record select). staleTime: 30_000 → POLL.staleMs.settings.
+- audit-view.tsx: 1 copy ternary migrated ({t("audit.verifyCommand")}, EN keeps the literal backticks). The surrounding EN-only paragraph and the Intl time formatter are unchanged (out of ternary scope).
+- patterns-view.tsx / integrations-view.tsx / exception-drawer.tsx: no changes — every `locale === "ar"` ternary in them selects server/registry bilingual fields (it.labelAr/label, exc.explanation.ar/en, c.message.ar/en, …) or an Intl locale string, i.e. data-driven selection, not hardcoded copy; the drawer/queue L("en","ar") helper calls are a helper pattern, not inline ternaries (flagged for a future pass).
+
+Stage Summary:
+- 99 catalog keys added; 98 hardcoded copy ternaries eliminated (overview 52, runs 45, audit 1); POLL/EVENTS constants wired in overview/queue/runs/rules/settings.
+- Ternaries intentionally left as-is: (1) runs-view validator-failed description — locale-dependent word order around the interpolated count (EN "<n> worked examples reproduced." vs AR "أُعيد إنتاج <n> من الأمثلة المرجعية.") is too entangled for a clean prefix/suffix split; (2) all data-driven field-select ternaries in queue/rules/settings/patterns/integrations/drawer listed above — not hardcoded copy.
+- refetchInterval: runs-view polls live runs via computed callbacks returning literal 3000; no plain `refetchInterval: <number>` literal exists (overview uses `false`) and app-config has no 3-second constant, so per the "ONLY if present" rule nothing was remapped (mapping to POLL.staleMs.* would have changed live-polling behaviour).
+- Verification: after each file, `bunx tsc --noEmit` filtered to src errors printed nothing (0 errors in src; the 4 pre-existing examples/ + skills/ errors remain filtered); eslint exit 0 on all seven touched files; no duplicate MESSAGES keys.
+
+---
+Task ID: prod-hardening-6
+Agent: orchestrator (Z.ai Code)
+Task: "no hardcoded practice and implement production level standards" + fix see-through notifications dropdown.
+
+Work Log:
+- Root-caused the see-through dropdown: src/components/ui/scroll-area.tsx Root was missing `overflow-hidden` (stock shadcn has it), so every max-h ScrollArea let content paint over the page; additionally the viewport's height:100% resolved against the auto-height root, so Radix never detected overflow (no scrollbar, unreachable items). Fixed both: Root `overflow-hidden` + Viewport `[max-height:inherit]`. Verified metrics: viewport capped 384px, scrollable, hover scrollbar (thumb 54px), scrollTop reaches 2356.
+- Created src/lib/app-config.ts as the single source of truth: BUILD_LINE (composes APP_VERSION + ENGINE_VERSION/PACK_VERSION from the rule pack), STORAGE_KEYS (locale/digits/theme/accent/kbdHint), POLL (notificationsMs 8s, systemStateMs 10s, queryStaleMs, queryRetry, kbdHintDismissMs, liveRunMs 3s, per-view staleMs), EVENTS.queueNav, DEFAULT_ACTOR, ANALYST_PAIR.
+- Rewired consumers: client store (default actor + VIEW_KEYS single source), use-i18n (storage keys), theme-provider (storage keys), server session (re-exports DEFAULT_ACTOR from app-config), system/state route (fallback actor), dry-run route (ANALYST_PAIR segregation-of-duties), page.tsx (query tuning, kbd hint, event name, footer), notification-panel (polling), command-palette (event + VIEW_KEYS), queue/overview/runs/rules/settings views (POLL.staleMs, POLL.liveRunMs via PROD-5).
+- Killed duplicated version string: footer now composes iso(BUILD_LINE) + bilingual principles line from the catalog (was a hardcoded full English string with duplicated versions).
+- i18n hardening ("no hardcoded copy"): added 21 shell/palette/notification catalog keys; migrated page.tsx, notification-panel, command-palette, shortcuts-dialog to t() (incl. JudgeRibbon label, skip link, aria labels, reset toast). Delegated Task PROD-5 (subagent): migrated 98 inline locale ternaries across overview-view (52) and runs-view (45) + audit-view (1) into 99 new catalog keys, EN/AR preserved character-for-character; leftovers are data-driven selects (headlineAr/headlineEn fields), Intl formatters, and 1 entangled template — all documented.
+- Notification panel production hardening: loading skeleton state, relative timestamps via Intl.RelativeTimeFormat (locale-aware, Arabic-Indic digits via iso), unread badge as role=status aria-live=polite, every item closes the panel (predictable dismissal), responsive max-w for narrow viewports.
+- Verification: tsc 0 src errors (4 pre-existing examples/skills excluded), eslint clean, browser-verified: light/dark/RTL notification panel opaque + clipped + scrollable, mobile 390px fits (358px), click-through opens exception drawer, rules-view max-h-[70vh] ScrollArea now capped+scrollable (same fix), queue 58 rows, ⌘K palette opens with catalog labels, footer single-source, console zero errors, dev.log clean. Browser closed, memory released.
+
+Stage Summary:
+- See-through dropdown fixed at the component-contract level (scroll-area.tsx) — benefits notification panel AND rules list.
+- Zero hardcoded operational constants: all keys/intervals/events/identity/version live in src/lib/app-config.ts; all shell + view copy lives in the i18n catalog.
+- Notification center upgraded to production UX (skeleton, relative time, live-region badge, responsive, predictable dismissal).

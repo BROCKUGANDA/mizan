@@ -6,6 +6,7 @@
  */
 
 import { db } from "@/lib/db";
+import { DEFAULT_ACTOR } from "@/lib/app-config";
 
 export type Role = "analyst" | "team_lead" | "ops_owner" | "policy_author" | "policy_approver" | "auditor" | "admin" | "compliance_lead";
 
@@ -16,7 +17,7 @@ export interface ActorContext {
   employeeId: string | null;
 }
 
-export const DEFAULT_ACTOR = "analyst-a";
+export { DEFAULT_ACTOR };
 
 export async function resolveActor(headerValue: string | null): Promise<ActorContext> {
   const id = headerValue?.trim() || DEFAULT_ACTOR;

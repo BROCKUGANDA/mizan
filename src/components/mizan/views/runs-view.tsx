@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { EmptyState, ErrorState, LoadingSkeleton } from "@/components/mizan/primitives";
 import { useI18n } from "@/lib/i18n/use-i18n";
+import { POLL } from "@/lib/app-config";
 import { api, ApiError, useAppStore, v1 } from "@/lib/client/store";
 import { cn } from "@/lib/utils";
 
@@ -184,7 +185,7 @@ export default function RunsView() {
     queryFn: () => api<{ items: RunRow[] }>(v1("/runs")),
     refetchInterval: (query) => {
       const newest = query.state.data?.items?.[0];
-      return newest && ACTIVE_STATUSES.includes(newest.status) ? 3000 : false;
+      return newest && ACTIVE_STATUSES.includes(newest.status) ? POLL.liveRunMs : false;
     },
   });
 
@@ -199,7 +200,7 @@ export default function RunsView() {
       setSelectedId(r.runId);
       await qc.invalidateQueries();
       toast({
-        title: locale === "ar" ? "بدأ التشغيل" : "Run started",
+        title: t("runs.started"),
         description: `${r.runId} · ${r.status}`,
       });
     },
@@ -223,7 +224,7 @@ export default function RunsView() {
     enabled: selectedId != null,
     refetchInterval: (query) => {
       const s = query.state.data?.status;
-      return s && ACTIVE_STATUSES.includes(s) ? 3000 : false;
+      return s && ACTIVE_STATUSES.includes(s) ? POLL.liveRunMs : false;
     },
   });
 
@@ -233,7 +234,7 @@ export default function RunsView() {
     queryKey: ["export", selectedId],
     queryFn: () => api<ExportBundle>(v1(`/runs/${selectedId as string}/export`)),
     enabled: canExport,
-    staleTime: 60_000,
+    staleTime: POLL.staleMs.runs,
   });
 
   const onStart = (): void => {
@@ -247,25 +248,23 @@ export default function RunsView() {
         <CardHeader className="pb-0">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <CardTitle className="text-sm font-medium text-muted-foreground">
-              {locale === "ar" ? "بدء تشغيل جديد" : "Start a new run"}
+              {t("runs.startNew")}
             </CardTitle>
             <span className="text-xs text-muted-foreground">
-              {locale === "ar"
-                ? "كل تشغيل يُقيِّم كل معاملة × كل قاعدة نشطة (تعداد كامل)."
-                : "Each run evaluates every transaction × every active rule (a full census)."}
+              {t("runs.startHint")}
             </span>
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-center gap-3">
             <Select value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
-              <SelectTrigger className="w-44" aria-label={locale === "ar" ? "نوع التشغيل" : "Run kind"}>
+              <SelectTrigger className="w-44" aria-label={t("runs.kindAria")}>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="standard">{locale === "ar" ? "قياسي" : "Standard"}</SelectItem>
-                <SelectItem value="shadow">{locale === "ar" ? "ظلّي (بدون تأثير)" : "Shadow (no side effects)"}</SelectItem>
-                <SelectItem value="backtest">{locale === "ar" ? "اختبار رجعي" : "Backtest"}</SelectItem>
+                <SelectItem value="standard">{t("runs.kindStandard")}</SelectItem>
+                <SelectItem value="shadow">{t("runs.kindShadow")}</SelectItem>
+                <SelectItem value="backtest">{t("runs.kindBacktest")}</SelectItem>
               </SelectContent>
             </Select>
             <Input
@@ -273,7 +272,7 @@ export default function RunsView() {
               value={asOf}
               onChange={(e) => setAsOf(e.target.value)}
               className="w-44"
-              aria-label={locale === "ar" ? "تاريخ البيانات (اختياري)" : "As-of date (optional)"}
+              aria-label={t("runs.asOfAria")}
             />
             <Button onClick={onStart} disabled={startMut.isPending} aria-busy={startMut.isPending}>
               {startMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Play className="h-4 w-4" aria-hidden />}
@@ -307,7 +306,7 @@ export default function RunsView() {
               {typeof liveRun.counts?.checks === "number" && liveRun.counts.checks > 0 ? (
                 <p className="text-xs text-muted-foreground">
                   {iso(String(liveRun.counts.transactions ?? 0))} × {iso(String(liveRun.counts.rules ?? 0))} ={" "}
-                  {iso(String(liveRun.counts.checks))} {locale === "ar" ? "فحص" : "checks"}
+                  {iso(String(liveRun.counts.checks))} {t("runs.checks")}
                 </p>
               ) : null}
             </div>
@@ -327,8 +326,8 @@ export default function RunsView() {
           />
         ) : items.length === 0 ? (
           <EmptyState
-            title={locale === "ar" ? "لا توجد تشغيلات بعد" : "No runs yet"}
-            hint={locale === "ar" ? "ابدأ التشغيل الأول بالأزرار أعلاه لملء قائمة الاستثناءات." : "Start the first run with the controls above to fill the exception queue."}
+            title={t("runs.noRuns.title")}
+            hint={t("runs.noRuns.hint")}
           />
         ) : (
           items.map((r) => {
@@ -358,7 +357,7 @@ export default function RunsView() {
                   <StatusBadge status={r.status} />
                   <span className="ms-auto flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                     <span>
-                      {locale === "ar" ? "كما في" : "as of"} <span className="font-mono">{iso(r.asOf)}</span>
+                      {t("runs.asOf")} <span className="font-mono">{iso(r.asOf)}</span>
                     </span>
                     <span className="font-mono">{iso(r.outputHash.slice(0, 16))}</span>
                   </span>
@@ -371,27 +370,27 @@ export default function RunsView() {
                   ) : null}
                   {typeof c.failed === "number" ? (
                     <span>
-                      {locale === "ar" ? "فشل" : "failed"} <span className="font-mono">{iso(String(c.failed))}</span>
+                      {t("runs.failed")} <span className="font-mono">{iso(String(c.failed))}</span>
                     </span>
                   ) : null}
                   {typeof c.notEvaluable === "number" ? (
                     <span>
-                      {locale === "ar" ? "غير قابل للتقييم" : "not evaluable"} <span className="font-mono">{iso(String(c.notEvaluable))}</span>
+                      {t("runs.notEvaluable")} <span className="font-mono">{iso(String(c.notEvaluable))}</span>
                     </span>
                   ) : null}
                   {typeof c.held === "number" ? (
                     <span>
-                      {locale === "ar" ? "محتجز" : "held"} <span className="font-mono">{iso(String(c.held))}</span>
+                      {t("runs.held")} <span className="font-mono">{iso(String(c.held))}</span>
                     </span>
                   ) : null}
                   {r.holds.length > 0 ? (
                     <span className="inline-flex items-center gap-1 text-hold">
                       <PauseCircle className="h-3 w-3" aria-hidden />
-                      {iso(String(r.holds.length))} {locale === "ar" ? "احتجاز" : "hold(s)"}
+                      {iso(String(r.holds.length))} {t("runs.holdCount")}
                     </span>
                   ) : null}
                   <span className="ms-auto">
-                    {locale === "ar" ? "بدأ" : "started"} <span className="font-mono">{iso(r.startedAt.slice(0, 10))}</span>
+                    {t("runs.startedAt")} <span className="font-mono">{iso(r.startedAt.slice(0, 10))}</span>
                   </span>
                 </div>
               </div>
@@ -419,13 +418,13 @@ export default function RunsView() {
             <CardHeader className="pb-0">
               <div className="flex flex-wrap items-center gap-3">
                 <CardTitle className="text-sm font-medium text-muted-foreground">
-                  {locale === "ar" ? "تفاصيل التشغيل" : "Run detail"}
+                  {t("runs.detail")}
                 </CardTitle>
                 <span className="font-mono text-sm">{detail.id}</span>
                 <KindBadge kind={detail.kind} />
                 <StatusBadge status={detail.status} />
                 <span className="text-xs text-muted-foreground">
-                  {locale === "ar" ? "كما في" : "as of"} <span className="font-mono">{iso(detail.asOf)}</span>
+                  {t("runs.asOf")} <span className="font-mono">{iso(detail.asOf)}</span>
                 </span>
                 <span className="font-mono text-xs text-muted-foreground">{iso(detail.outputHash.slice(0, 16))}</span>
               </div>
@@ -433,7 +432,7 @@ export default function RunsView() {
             <CardContent className="space-y-6">
               {/* Manifest hashes / versions */}
               <div>
-                <p className="mb-2 text-sm font-medium">{locale === "ar" ? "بيان التشغيل (manifest)" : "Run manifest"}</p>
+                <p className="mb-2 text-sm font-medium">{t("runs.manifest")}</p>
                 <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
                   {(
                     [
@@ -465,7 +464,7 @@ export default function RunsView() {
                     <Alert key={`${h.kind}-${h.ruleId ?? i}`} className="border-hold/40 bg-hold/10 text-foreground">
                       <PauseCircle className="h-4 w-4 text-hold" aria-hidden />
                       <AlertTitle>
-                        {locale === "ar" ? "احتجاز" : "Hold"} · {h.kind}
+                        {t("runs.hold")} · {h.kind}
                         {h.ruleId ? ` · ${h.ruleId}` : ""}
                       </AlertTitle>
                       <AlertDescription>{h.reason}</AlertDescription>
@@ -476,20 +475,20 @@ export default function RunsView() {
 
               {/* Per-rule coverage matrix */}
               <div>
-                <p className="mb-2 text-sm font-medium">{locale === "ar" ? "مصفوفة التغطية لكل قاعدة" : "Per-rule coverage matrix"}</p>
+                <p className="mb-2 text-sm font-medium">{t("runs.perRuleMatrix")}</p>
                 {Object.keys(detail.perRule).length === 0 ? (
-                  <EmptyState title={locale === "ar" ? "لا توجد نتائج لكل قاعدة" : "No per-rule results"} />
+                  <EmptyState title={t("runs.noPerRule")} />
                 ) : (
-                  <div className="max-h-72 overflow-y-auto" role="region" aria-label={locale === "ar" ? "مصفوفة التغطية" : "Per-rule coverage matrix"}>
+                  <div className="max-h-72 overflow-y-auto" role="region" aria-label={t("runs.perRuleAria")}>
                     <Table>
                       <TableHeader>
                         <TableRow>
-                          <TableHead scope="col">{locale === "ar" ? "القاعدة" : "Rule"}</TableHead>
-                          <TableHead scope="col" className="text-end">{locale === "ar" ? "الإجمالي" : "Total"}</TableHead>
-                          <TableHead scope="col" className="text-end">{locale === "ar" ? "ناجح" : "Pass"}</TableHead>
-                          <TableHead scope="col" className="text-end">{locale === "ar" ? "غير منطبق" : "N/A"}</TableHead>
-                          <TableHead scope="col" className="text-end">{locale === "ar" ? "غير قابل للتقييم" : "Not evaluable"}</TableHead>
-                          <TableHead scope="col" className="text-end">{locale === "ar" ? "فشل" : "Failed"}</TableHead>
+                          <TableHead scope="col">{t("runs.colRule")}</TableHead>
+                          <TableHead scope="col" className="text-end">{t("runs.colTotal")}</TableHead>
+                          <TableHead scope="col" className="text-end">{t("runs.colPass")}</TableHead>
+                          <TableHead scope="col" className="text-end">{t("runs.colNA")}</TableHead>
+                          <TableHead scope="col" className="text-end">{t("runs.colNotEvaluable")}</TableHead>
+                          <TableHead scope="col" className="text-end">{t("runs.colFailed")}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -515,14 +514,12 @@ export default function RunsView() {
               <div className="rounded-lg border border-border p-4">
                 <p className="mb-3 flex items-center gap-2 text-sm font-medium">
                   <FileDown className="h-4 w-4" aria-hidden />
-                  {locale === "ar" ? "التصدير (FS-20)" : "Export (FS-20)"}
+                  {t("runs.exportTitle")}
                 </p>
 
                 {!canExport ? (
                   <p className="text-xs text-muted-foreground" role="note">
-                    {locale === "ar"
-                      ? "يتاح التصدير بعد اكتمال التشغيل (COMPLETED أو WITH_HOLDS أو WITH_DQ)."
-                      : "Export unlocks when the run completes (COMPLETED, COMPLETED_WITH_HOLDS or COMPLETED_WITH_DQ)."}
+                    {t("runs.exportLocked")}
                   </p>
                 ) : exportQuery.isPending ? (
                   <LoadingSkeleton rows={2} />
@@ -543,13 +540,11 @@ export default function RunsView() {
                           <Alert className="border-ok/40 bg-ok/10 text-foreground [&>svg]:text-ok">
                             <CheckCircle2 className="h-4 w-4" aria-hidden />
                             <AlertTitle>
-                              {locale === "ar"
-                                ? `اجتاز مُصادِق التصدير — أُعيد إنتاج ${iso(`${passed}/${total}`)} من الأمثلة المرجعية`
-                                : `Export validator passed — ${iso(`${passed}/${total}`)} worked examples reproduced`}
+                              {t("runs.validatorPassedPrefix")} {iso(`${passed}/${total}`)} {t("runs.validatorPassedSuffix")}
                             </AlertTitle>
                             <AlertDescription>
-                              {locale === "ar" ? "الملف الشخصي" : "profile"} {v.profileVersion} ·{" "}
-                              {locale === "ar" ? "هاش الملف" : "findings sha-256"}{" "}
+                              {t("runs.profile")} {v.profileVersion} ·{" "}
+                              {t("runs.findingsSha")}{" "}
                               <span className="font-mono">{v.findingsSha256.slice(0, 16)}</span>
                             </AlertDescription>
                           </Alert>
@@ -560,7 +555,7 @@ export default function RunsView() {
                           <Alert variant="destructive">
                             <TriangleAlert className="h-4 w-4" aria-hidden />
                             <AlertTitle>
-                              {locale === "ar" ? "فشل مُصادِق التصدير — التنزيل معطّل" : "Export validator failed — downloads are disabled"}
+                              {t("runs.validatorFailed")}
                             </AlertTitle>
                             <AlertDescription>
                               {locale === "ar"
@@ -580,10 +575,10 @@ export default function RunsView() {
                               <Table>
                                 <TableHeader>
                                   <TableRow>
-                                    <TableHead scope="col">{locale === "ar" ? "المعاملة" : "Transaction"}</TableHead>
-                                    <TableHead scope="col">{locale === "ar" ? "العمود" : "Column"}</TableHead>
-                                    <TableHead scope="col">{locale === "ar" ? "المتوقع" : "Expected"}</TableHead>
-                                    <TableHead scope="col">{locale === "ar" ? "الفعلي" : "Actual"}</TableHead>
+                                    <TableHead scope="col">{t("runs.colTransaction")}</TableHead>
+                                    <TableHead scope="col">{t("runs.colColumn")}</TableHead>
+                                    <TableHead scope="col">{t("runs.colExpected")}</TableHead>
+                                    <TableHead scope="col">{t("runs.colActual")}</TableHead>
                                   </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -617,8 +612,8 @@ export default function RunsView() {
                         }
                         aria-label={
                           exportQuery.data.validation.ok
-                            ? locale === "ar" ? "تنزيل ملف النتائج" : "Download findings CSV"
-                            : locale === "ar" ? "تنزيل ملف النتائج (معطّل: فشل المُصادِق)" : "Download findings CSV (disabled: validator failed)"
+                            ? t("runs.downloadFindings")
+                            : t("runs.downloadFindingsDisabled")
                         }
                       >
                         <Download className="h-4 w-4" aria-hidden />
@@ -630,7 +625,7 @@ export default function RunsView() {
                         onClick={() =>
                           downloadB64(exportQuery.data!.dataQualityCsvB64, `data_quality-${exportQuery.data!.runId}.csv`)
                         }
-                        aria-label={locale === "ar" ? "تنزيل ملف جودة البيانات" : "Download data quality CSV"}
+                        aria-label={t("runs.downloadDq")}
                       >
                         <Download className="h-4 w-4" aria-hidden />
                         data_quality-{exportQuery.data.runId}.csv
@@ -644,8 +639,8 @@ export default function RunsView() {
         ) : null
       ) : selectedRun === null && items.length > 0 ? (
         <EmptyState
-          title={locale === "ar" ? "اختر تشغيلاً لعرض التفاصيل" : "Select a run to inspect"}
-          hint={locale === "ar" ? "يعرض البيان، مصفوفة التغطية، الاحتجازات ولوحة التصدير." : "The manifest, coverage matrix, holds and the export panel appear here."}
+          title={t("runs.selectRun.title")}
+          hint={t("runs.selectRun.hint")}
         />
       ) : null}
     </div>

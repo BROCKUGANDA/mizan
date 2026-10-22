@@ -24,6 +24,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError, api, useAppStore, v1 } from "@/lib/client/store";
 import { useI18n } from "@/lib/i18n/use-i18n";
+import { EVENTS, POLL } from "@/lib/app-config";
 import { EmptyState, ErrorState, LoadingSkeleton, SeverityBadge, StatusBadge } from "@/components/mizan/primitives";
 import type { ExceptionStatus, Severity } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
@@ -180,7 +181,7 @@ export function QueueView() {
   const runsLite = useQuery<RunsList>({
     queryKey: ["runs-lite"],
     queryFn: () => api<RunsList>(v1("/runs")),
-    staleTime: 15_000,
+    staleTime: POLL.staleMs.queue,
   });
 
   const items = useMemo(() => queue.data?.items ?? [], [queue.data]);
@@ -208,8 +209,8 @@ export function QueueView() {
       const next = Math.min(max, Math.max(0, useAppStore.getState().queueIndex + dir));
       setQueueIndex(next);
     };
-    window.addEventListener("mizan-queue-nav", onNav);
-    return () => window.removeEventListener("mizan-queue-nav", onNav);
+    window.addEventListener(EVENTS.queueNav, onNav);
+    return () => window.removeEventListener(EVENTS.queueNav, onNav);
   }, [setQueueIndex]);
 
   // Enter opens the highlighted row (when focus is not inside a control).

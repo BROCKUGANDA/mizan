@@ -5,6 +5,7 @@ import { getHrmsAdapter } from "@/lib/integrations/hrms-adapter";
 import { getErpAdapter } from "@/lib/integrations/finance-adapter";
 import { writebackAdapter } from "@/lib/integrations/writeback-adapter";
 import { appendAudit } from "@/lib/audit/chain";
+import { ANALYST_PAIR } from "@/lib/app-config";
 import type { Role } from "@/lib/server/session";
 
 export const dynamic = "force-dynamic";
@@ -69,7 +70,8 @@ async function dryRun(id: string, actorId: string): Promise<{ ok: boolean; detai
         targetEntity: "TXN-SAMPLE",
         changes: [{ field: "approverId", from: "EMP-100000", to: "EMP-100037", evidenceHash: "dry-run" }],
         createdBy: actorId,
-        verifiedBy: actorId === "analyst-b" ? "analyst-a" : "analyst-b", // never self-verified
+        // never self-verified (segregation of duties; pair defined in app-config)
+        verifiedBy: actorId === ANALYST_PAIR[1] ? ANALYST_PAIR[0] : ANALYST_PAIR[1],
         idempotencyKey: `dry-run-${actorId}`,
       });
       return {

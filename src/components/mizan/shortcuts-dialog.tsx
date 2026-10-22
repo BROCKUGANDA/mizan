@@ -5,9 +5,9 @@ import { useI18n } from "@/lib/i18n/use-i18n";
 
 /** Keyboard shortcuts dialog (?). */
 export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const rows: [string, string][] = [
-    [locale === "ar" ? "⌘ / Ctrl + K" : "⌘ / Ctrl + K", t("shortcuts.palette")],
+    ["⌘ / Ctrl + K", t("shortcuts.palette")],
     ["J", t("shortcuts.next")],
     ["K", t("shortcuts.prev")],
     ["Esc", t("common.close")],

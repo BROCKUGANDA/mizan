@@ -40,6 +40,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { SeverityBadge, EmptyState, ErrorState, LoadingSkeleton, ShadowChip } from "@/components/mizan/primitives";
 import { api, v1, useAppStore, ApiError } from "@/lib/client/store";
 import { useI18n } from "@/lib/i18n/use-i18n";
+import { POLL } from "@/lib/app-config";
 import { cn } from "@/lib/utils";
 
 /* ── contracts (mirror of the API payloads) ─────────────────────────────────── */
@@ -349,7 +350,7 @@ export default function RulesView() {
   const roleQuery = useQuery<{ actors: { id: string; role: string }[] }>({
     queryKey: ["system-state", actor],
     queryFn: () => api(v1("/system/state")),
-    staleTime: 30_000,
+    staleTime: POLL.staleMs.rules,
   });
   const role = roleQuery.data?.actors.find((a) => a.id === actor)?.role ?? null;
   const canApprove = role === "policy_approver" || role === "admin";

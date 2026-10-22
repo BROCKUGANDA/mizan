@@ -105,8 +105,31 @@ export function isMzError(e: unknown): e is MzError {
   return e instanceof MzError;
 }
 
-/** Wrap unknown errors; never leak internals. */
+/**
+ * Wrap unknown errors; never leak internals (hardened).
+ * - MzError passes through untouched (curated, judge-safe wording).
+ * - SyntaxError from req.json() on a malformed body → MZ-VAL-422 (not a 500).
+ * - Prisma known constraint errors (duck-typed, no runtime import — the domain
+ *   layer stays dependency-free): P2002 → concurrency conflict, P2025 → not found
+ *   (never confirm existence cross-tenant).
+ * - Anything else → MZ-INT-500 with a GENERIC detail; the raw message is logged
+ *   server-side by problemResponse (api.ts) with the request correlation id, so
+ *   operators keep diagnostics without exposing paths/SQL/stacks on the wire.
+ */
 export function toMzError(e: unknown): MzError {
   if (isMzError(e)) return e;
-  return new MzError("MZ-INT-500", e instanceof Error ? e.message : "Unknown error");
+  if (e instanceof SyntaxError) {
+    // JSON.parse failure — req.json() on a malformed request body.
+    return new MzError("MZ-VAL-422", "Request body is not valid JSON.");
+  }
+  if (typeof e === "object" && e !== null && "code" in e) {
+    const prismaCode = String((e as { code?: unknown }).code);
+    if (prismaCode === "P2002") {
+      return new MzError("MZ-CONC-409", "This record was changed concurrently; reload and retry.");
+    }
+    if (prismaCode === "P2025") {
+      return new MzError("MZ-AUTH-403", "Not found"); // never confirm existence cross-tenant
+    }
+  }
+  return new MzError("MZ-INT-500", "An internal error occurred. Quote the correlation id when reporting.");
 }

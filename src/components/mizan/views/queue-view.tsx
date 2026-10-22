@@ -622,7 +622,7 @@ export function QueueView() {
                   <TableCell>
                     <SeverityBadge severity={it.severity} />
                   </TableCell>
-                  <TableCell className="font-mono text-xs" title={it.txnId}>
+                  <TableCell className="tnum font-mono text-xs" title={it.txnId}>
                     {it.displayId}
                   </TableCell>
                   <TableCell className="max-w-72">
@@ -651,14 +651,14 @@ export function QueueView() {
                       </div>
                     ) : null}
                   </TableCell>
-                  <TableCell className="whitespace-nowrap font-mono text-xs">
+                  <TableCell className="tnum whitespace-nowrap font-mono text-xs">
                     {it.ruleId} · {it.clauseId}
                   </TableCell>
                   <TableCell>
                     <StatusBadge status={it.status} />
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{it.ownerTeam}</TableCell>
-                  <TableCell className={cn("whitespace-nowrap font-mono text-xs", overdue && "font-medium text-sev-critical")}>
+                  <TableCell className={cn("tnum whitespace-nowrap font-mono text-xs", overdue && "font-medium text-sev-critical")}>
                     {overdue ? <Flag className="me-1 inline h-3 w-3" aria-hidden /> : null}
                     {dateOnly(it.resolveDueAt)}
                   </TableCell>

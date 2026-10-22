@@ -150,3 +150,26 @@ Work Log:
 Stage Summary:
 - Preview panel now works: iframe embedding allowed in sandbox, strict frame protection preserved for production (no red-line regression: synthetic-only and human-in-the-loop untouched).
 - Known operational note: if the dev server needs a manual restart, use the reparenting launch pattern above (plain `&` backgrounding gets reaped between tool calls).
+
+---
+Task ID: polish-hardening
+Agent: orchestrator (Z.ai Code)
+Task: "do a ui/ux polish and hardening" — polish pass + hardening pass on the MIZAN app.
+
+Work Log:
+- Surveyed shell/primitives/globals/session/rate-limit/api/decisions-route: SADU token system, severity dual-coding, rate limits, role matrix, mode guards, If-Match + idempotency all already present.
+- UI/UX polish:
+  - Self-hosted IBM Plex via @fontsource (Sans 400-700, Sans Arabic 400-700, Mono 400/500) — §28 previously "preferred" the fonts but never loaded them; now bundled woff2 served from /_next/static, offline-safe, no font CDN at runtime.
+  - Fixed favicon 404: layout referenced /favicon.ico which did not exist; added src/app/icon.svg (brand red rounded square + gold inner ring + meem glyph, matches .brand-mark) and pointed metadata at it.
+  - metadata/viewport: added viewportFit cover + light/dark theme-color, applicationName.
+  - globals.css: Firefox scrollbar equivalents (scrollbar-width/color), brand-tinted gold text selection, .tnum tabular-numerals utility, text-wrap balance on h1-h3.
+  - Applied .tnum to queue table ID/rule/due columns so figures align.
+- Hardening:
+  - toMzError no longer leaks raw e.message on the wire (comment claimed "never leak internals" but detail passed e.message through). Now: SyntaxError (malformed JSON body) → MZ-VAL-422 clean 400-class response (was 500); Prisma P2002 → MZ-CONC-409, P2025 → MZ-AUTH-403 "Not found" (duck-typed, domain layer stays dependency-free); all other unknown errors → MZ-INT-500 with generic detail.
+  - problemResponse logs unexpected (non-MzError) failures server-side with correlation id + stack, so operators keep diagnostics after wire sanitization.
+- Verified: bunx tsc clean in src/ (remaining errors are pre-existing examples/ + skills/ reference files), eslint clean; browser session: IBM Plex woff2 requests 200, icon.svg 200, malformed-JSON POST → 422 MZ-VAL-422 (proven via curl), light/dark/RTL screenshots all correct with zero console errors; gateway 200. Browser closed after verification to keep memory for the dev server.
+
+Stage Summary:
+- Visual identity upgraded from fallback system fonts to real IBM Plex Sans/Arabic/Mono (Emirates vibe, RTL first-class); favicon + metadata hardened; alignment polish on data tables.
+- API error surface hardened: no internal message leakage, correct status classes, server-side diagnostic logging.
+- No red lines touched: synthetic-only badge intact, human-in-the-loop flows unchanged.

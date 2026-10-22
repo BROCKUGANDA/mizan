@@ -41,6 +41,12 @@ export function withApiRoute<P = Record<string, string>>(handler: RouteHandler<P
 
 export function problemResponse(e: unknown, correlationId: string): NextResponse {
   const mz = toMzError(e);
+  // Full detail stays server-side only (hardening): the wire body carries the
+  // generic MZ- title/detail; intentional MzErrors are expected control flow
+  // and are not logged, unexpected errors are logged with the correlation id.
+  if (!(e instanceof MzError)) {
+    console.error(`[mizan:api] ${correlationId} -> ${mz.code}`, e instanceof Error ? e.stack : e);
+  }
   const body = { ...mz.toProblem(), correlationId } as Record<string, unknown>;
   const headers: Record<string, string> = { "content-type": "application/problem+json", "x-request-id": correlationId };
   if (mz.code === "MZ-RATE-429" || mz.code === "MZ-MODE-503" || mz.code === "MZ-DEP-503") headers["retry-after"] = "5";

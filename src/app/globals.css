@@ -295,11 +295,28 @@
   body {
     @apply bg-background text-foreground;
   }
-  /* Custom scrollbar (long lists) */
+  /* Custom scrollbar (long lists) — WebKit + Firefox equivalents */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 8px; border: 2px solid var(--background); }
   ::-webkit-scrollbar-thumb:hover { background: var(--muted-foreground); }
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  /* Brand-tinted text selection (Emirates vibe, stays readable in dark mode) */
+  ::selection {
+    background: color-mix(in oklab, var(--gold) 30%, transparent);
+    color: var(--foreground);
+  }
+  /* Data columns align: amounts/ids in tables keep equal widths (§31 polish) */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Headings wrap gracefully instead of leaving one-word orphan lines */
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
 
   /* Reduced motion: replace movement with fades, stop shimmer (§30) */
   @media (prefers-reduced-motion: reduce) {

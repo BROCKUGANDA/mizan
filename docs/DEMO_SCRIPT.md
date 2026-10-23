@@ -1,5 +1,9 @@
 # Demo script — 3:00 (scene timings)
 
+Published recording: <https://youtu.be/QE2QcfPyz8Y> (2:40, 1080p, narrated and
+captioned; source `submission/mizan-demo.mp4`). The scene list below is what that
+recording follows.
+
 | Time | Scene | Beat |
 | --- | --- | --- |
 | 0:00–0:15 | The problem | "Sampling 5% finds 1 in 20 problems. MIZAN checks all of them." (Overview) |

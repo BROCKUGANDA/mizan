@@ -4,8 +4,9 @@
 | --- | --- | --- |
 | Working prototype | [github.com/BROCKUGANDA/mizan](https://github.com/BROCKUGANDA/mizan) — runnable repo, setup below | public, MIT, `main` only, no CI actions |
 | Flagged exceptions for the test file | `bun run mizan hidden-test <file>` → `findings.csv` + `data_quality.csv` + `run-manifest.json` | command proven on the training pack (see `findings-training-pack/`) |
-| Demo video ≤ 3 min | `mizan-demo.mp4` — 2 min 40 s, 1080p, narrated and captioned | included |
+| Demo video ≤ 3 min | Hosted: [youtu.be/QE2QcfPyz8Y](https://youtu.be/QE2QcfPyz8Y) · source `mizan-demo.mp4` — 2 min 40 s, 1080p, narrated and captioned | included |
 | Solution note ≤ 2 pages | `mizan-solution-note.pdf` — 2 pages A4, includes the responsible-AI statement | included |
+| Pitch deck | `mizan-pitch-deck.pdf` (10 slides) · `pitch-deck.html` (same deck, navigable) | included |
 
 ## Prototype setup
 
@@ -51,8 +52,12 @@ offline scoring path and the product agree.
 
 ## Contents of this folder
 
-- `mizan-demo.mp4` — 2:40, 1920×1080, H.264/AAC, burned captions. SHA-256 `483608dc8ab287e34d2739f6f6d56e39e53033b0af363961949098543d4c830f`
+- `mizan-demo.mp4` — 2:40, 1920×1080, H.264/AAC, burned captions. Published at
+  <https://youtu.be/QE2QcfPyz8Y>. SHA-256 `483608dc8ab287e34d2739f6f6d56e39e53033b0af363961949098543d4c830f`
 - `mizan-solution-note.pdf` — 2 pages A4. SHA-256 `e1f0311f2148eb2c6719da547595ab71e99b041fa98f3469f7092b3e719c311f`
+- `mizan-pitch-deck.pdf` — 10 slides, 16:9, with the repo and video links on the
+  title, evidence and closing slides; `pitch-deck.html` is the same deck for
+  presenting from a browser
 - `findings-training-pack/` — findings CSV, data-quality CSV, run manifest, shift report
 
 Synthetic data only. MIZAN holds no credentials for any HR system and has no

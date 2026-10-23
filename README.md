@@ -63,9 +63,13 @@ produce 49 findings, 13 data-quality rows and output hash
 
 ## Submission artefacts
 
-`submission/` holds the challenge deliverables: the narrated 2:40 demo video, the
-two-page solution note PDF, the training-pack findings that prove the output
-format, and a README mapping each deliverable to where it is produced.
+`submission/` holds the challenge deliverables: the two-page solution note PDF,
+the 10-slide pitch deck (`mizan-pitch-deck.pdf`, or `pitch-deck.html` to present
+from a browser), the training-pack findings that prove the output format, and a
+README mapping each deliverable to where it is produced.
+
+The demo video (2:40, narrated and captioned) is published at
+<https://youtu.be/QE2QcfPyz8Y>; `submission/mizan-demo.mp4` is the same file.
 
 ## Tests and gates
 

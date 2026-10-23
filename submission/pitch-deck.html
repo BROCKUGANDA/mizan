@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="utf-8">
+<title>MIZAN — pitch deck</title>
+<style>
+  :root {
+    --sand: #faf7f0; --sand-2: #f1ece2; --ink: #1d1916; --ink-2: #5b5148;
+    --red: #8c1d18; --gold: #c9a227; --line: #ddd3c6;
+    --ok: #1f6f4a; --high: #b3541e; --crit: #a1241d;
+  }
+  @page { size: 1280px 720px; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #2a2521; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif; color: var(--ink); }
+  .slide {
+    position: relative; width: 1280px; height: 720px; background: var(--sand);
+    padding: 58px 72px 64px; overflow: hidden; page-break-after: always;
+    margin: 0 auto 26px; display: flex; flex-direction: column;
+  }
+  @media screen { .slide { box-shadow: 0 18px 48px rgba(0,0,0,.45); } }
+  .strip { position: absolute; left: 0; right: 0; top: 0; height: 12px;
+    background: repeating-linear-gradient(90deg, var(--red) 0 34px, var(--gold) 34px 68px, var(--ink) 68px 102px); }
+  .strip.b { top: auto; bottom: 0; }
+  .kicker { font-size: 13px; letter-spacing: 2.4px; text-transform: uppercase; color: var(--red); font-weight: 700; }
+  .ar { font-size: 20px; color: var(--gold); font-weight: 600; }
+  h1 { font-size: 74px; line-height: 1.02; margin: 14px 0 10px; letter-spacing: -1px; }
+  h2 { font-size: 40px; line-height: 1.1; margin: 10px 0 22px; letter-spacing: -.4px; }
+  h2 .w { color: var(--red); }
+  p { font-size: 20px; line-height: 1.45; margin: 0 0 14px; color: var(--ink); }
+  p.mut, .mut { color: var(--ink-2); }
+  .lead { font-size: 24px; max-width: 1000px; }
+  .body { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+  .foot { display: flex; justify-content: space-between; align-items: center; font-size: 14px; color: var(--ink-2); border-top: 1px solid var(--line); padding-top: 12px; }
+  .foot a { color: var(--red); text-decoration: none; font-weight: 600; }
+  .num { position: absolute; right: 72px; top: 46px; font-size: 14px; color: var(--ink-2); letter-spacing: 1px; }
+  .cards { display: grid; gap: 18px; }
+  .c3 { grid-template-columns: repeat(3, 1fr); }
+  .c2 { grid-template-columns: repeat(2, 1fr); }
+  .c4 { grid-template-columns: repeat(4, 1fr); }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; }
+  .card h3 { margin: 0 0 8px; font-size: 19px; color: var(--red); }
+  .card p { font-size: 16.5px; line-height: 1.42; margin: 0; }
+  .stat { background: var(--ink); color: var(--sand); border-radius: 12px; padding: 22px; }
+  .stat .v { font-size: 44px; font-weight: 700; letter-spacing: -1px; line-height: 1; }
+  .stat .k { font-size: 14.5px; color: #cfc4b6; margin-top: 8px; line-height: 1.35; }
+  .eq { font-size: 30px; font-weight: 600; letter-spacing: -.3px; }
+  .eq .o { color: var(--red); }
+  code, .mono { font-family: "IBM Plex Mono", Consolas, monospace; }
+  code { background: var(--sand-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; font-size: .92em; }
+  pre { background: var(--ink); color: #f0e9dd; border-radius: 12px; padding: 20px 24px; font-size: 17px; line-height: 1.6; margin: 0 0 16px; overflow: hidden; }
+  pre .c { color: #9c8f7f; }
+  pre .g { color: var(--gold); }
+  table { width: 100%; border-collapse: collapse; font-size: 17px; }
+  th { text-align: left; font-size: 13px; letter-spacing: 1.4px; text-transform: uppercase; color: var(--ink-2); border-bottom: 2px solid var(--ink); padding: 0 14px 10px 0; }
+  td { border-bottom: 1px solid var(--line); padding: 13px 14px 13px 0; vertical-align: top; line-height: 1.4; }
+  td.m { font-weight: 700; color: var(--red); white-space: nowrap; }
+  ul.ticks { list-style: none; padding: 0; margin: 0; }
+  ul.ticks li { position: relative; padding-left: 34px; font-size: 17.5px; line-height: 1.42; margin-bottom: 11px; }
+  ul.ticks li::before { content: "✓"; position: absolute; left: 0; top: 0; color: var(--ok); font-weight: 700; font-size: 20px; }
+  ul.ticks li b { color: var(--ink); }
+  .pill { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 7px 16px; font-size: 15.5px; background: #fff; margin: 0 8px 8px 0; }
+  .pill.warn { border-color: var(--high); color: var(--high); }
+  .pill.ok { border-color: var(--ok); color: var(--ok); }
+  .links { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+  .link { display: inline-flex; align-items: center; gap: 10px; background: var(--ink); color: var(--sand); text-decoration: none; border-radius: 10px; padding: 14px 22px; font-size: 19px; font-weight: 600; }
+  .link.alt { background: var(--red); }
+  .link span.u { font-family: "IBM Plex Mono", Consolas, monospace; font-size: 16.5px; font-weight: 400; color: #e8ded1; }
+  .crit-line { border-left: 4px solid var(--red); padding-left: 18px; margin-bottom: 16px; }
+  .crit-line .t { font-size: 15px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--red); font-weight: 700; }
+  .crit-line .d { font-size: 18.5px; line-height: 1.45; }
+  .drawer { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; font-size: 15px; line-height: 1.45; }
+  .drawer .hd { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 17px; margin-bottom: 3px; }
+  .badge { font-size: 12.5px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--crit); color: var(--crit); font-weight: 700; letter-spacing: .4px; }
+  .badge.st { border-color: var(--ink-2); color: var(--ink-2); }
+  .drawer .sec { margin-top: 11px; }
+  .drawer .lbl { font-size: 11.5px; letter-spacing: 1.3px; text-transform: uppercase; color: var(--ink-2); font-weight: 700; }
+  .ev { width: 100%; border-collapse: collapse; margin-top: 7px; font-size: 14.5px; }
+  .ev td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--sand-2); }
+  .ev tr.hit td { background: #fbeceb; color: var(--crit); font-weight: 700; }
+  .ev td.src { color: var(--ink-2); font-family: "IBM Plex Mono", Consolas, monospace; font-size: 12.5px; text-align: right; }
+</style>
+</head>
+<body>
+
+<section class="slide">
+  <div class="strip"></div><div class="strip b"></div>
+  <div class="body">
+    <div class="kicker">Emirates Group HR — policy assurance challenge</div>
+    <h1>MIZAN <span class="ar">ميزان</span></h1>
+    <p class="lead mut">Continuous HR policy assurance. <b style="color:var(--ink)">A census, not a sample</b> — every transaction checked against every written rule, and a named human on every exception.</p>
+    <div class="links">
+      <a class="link" href="https://github.com/BROCKUGANDA/mizan"><span>Repo</span><span class="u">github.com/BROCKUGANDA/mizan</span></a>
+      <a class="link alt" href="https://youtu.be/QE2QcfPyz8Y"><span>Demo · 2:40</span><span class="u">youtu.be/QE2QcfPyz8Y</span></a>
+    </div>
+    <p class="mut" style="font-size:16px;margin-top:22px">Synthetic data only · MIT licensed · no write path to any HR system</p>
+  </div>
+  <div class="foot"><span>MIZAN — pitch deck</span><span>Prototype, demo video and solution note are all linked from this deck</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">02</div>
+  <div class="kicker">The problem</div>
+  <h2>Sampling audits <span class="w">miss what matters</span></h2>
+  <div class="body">
+    <div class="cards c3" style="margin-bottom:26px">
+      <div class="card"><h3>1 in 20</h3><p>A 5% sample finds roughly one in twenty problems. The other nineteen approve pay, move grades and exit people anyway.</p></div>
+      <div class="card"><h3>After the fact</h3><p>Quarterly review reports on a period that already closed. The overpayment is recovered, if at all, months later.</p></div>
+      <div class="card"><h3>No audit trail</h3><p>Spreadsheets of findings cannot show who decided what, on which evidence, under whose authority.</p></div>
+    </div>
+    <p class="lead">MIZAN checks <b>every</b> transaction against <b>every</b> written clause on every run — in seconds — and turns each failure into an exception that explains itself and waits for a person.</p>
+  </div>
+  <div class="foot"><a href="https://github.com/BROCKUGANDA/mizan">github.com/BROCKUGANDA/mizan</a><span>01 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">03</div>
+  <div class="kicker">The approach</div>
+  <h2>A census you can <span class="w">reconcile</span></h2>
+  <div class="body">
+    <p class="eq">1,061 transactions <span class="o">×</span> 15 rule clauses <span class="o">=</span> 15,915 checks <span class="o">→</span> 0.3 s</p>
+    <p class="mut" style="margin-top:10px">Applicable + not-applicable = total. Evaluated + not-evaluable = applicable. The arithmetic has to close, and the run asserts it does.</p>
+    <div class="cards c4">
+      <div class="stat"><div class="v">49</div><div class="k">findings on the training pack (5 Critical, 32 High, 12 Medium)</div></div>
+      <div class="stat"><div class="v">13</div><div class="k">data-quality exceptions routed to stewardship, not to a payroll owner</div></div>
+      <div class="stat"><div class="v">22</div><div class="k">not evaluable — declared with a DQ code, never a silent pass</div></div>
+      <div class="stat"><div class="v">0</div><div class="k">exceptions closed without a named human decision</div></div>
+    </div>
+  </div>
+  <div class="foot"><a href="https://youtu.be/QE2QcfPyz8Y">Watch the census and queue in 40 seconds · youtu.be/QE2QcfPyz8Y</a><span>02 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">04</div>
+  <div class="kicker">Detection accuracy — 30%</div>
+  <h2>Planted violations found, <span class="w">near-misses left alone</span></h2>
+  <div class="body">
+    <table>
+      <tr><th style="width:34%">Check</th><th>Result</th></tr>
+      <tr><td>Worked examples in <code>finding_format.csv</code></td><td><b>5 / 5 reproduce exactly</b> on every scored column, before the file is allowed to download</td></tr>
+      <tr><td>Independent SQL oracle (sql.js, written from the policy text)</td><td><b>100% agreement</b> with the engine on the full pack</td></tr>
+      <tr><td>Mutation harness (labelled planted + near-miss variants)</td><td><b>100% positive recall · 0 near-miss false positives</b></td></tr>
+      <tr><td>Format mutations · metamorphic relations</td><td><b>9 / 9</b> rejected · <b>7 / 7</b> held</td></tr>
+      <tr><td>Determinism</td><td>Same bytes every time: <code>ecefa394…</code> from the CLI, the server and the seed</td></tr>
+    </table>
+    <p class="mut" style="margin-top:18px">On the hidden file: <code>bun run mizan hidden-test &lt;file&gt;</code> writes <code>findings.csv</code> in the required format plus a run manifest — and exits non-zero unless its own census, format and determinism checks pass. A submission cannot be produced from a run that failed itself.</p>
+  </div>
+  <div class="foot"><a href="https://github.com/BROCKUGANDA/mizan">README → “Running on the hidden test file”</a><span>03 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">05</div>
+  <div class="kicker">Explanation and routing — 25%</div>
+  <h2>Every flag <span class="w">argues for itself</span></h2>
+  <div class="body">
+    <div style="display:grid;grid-template-columns:1.05fr 1fr;gap:28px;align-items:start">
+      <div class="drawer">
+        <div class="hd">F-SSTRR8EN5JC3 <span class="badge">Critical</span> <span class="badge st">New</span> <span class="mono" style="margin-left:auto;font-size:13px">R09 · C1</span></div>
+        <div class="mut" style="font-size:14px">WX-1003 · Compensation &amp; Payroll Operations</div>
+        <div class="sec"><div class="lbl">What broke</div><p style="font-size:15.5px;margin:5px 0 0">Employee E04567 had an exit date of 2026-02-28, but transaction WX-1003 changed pay by AED 8,200.00 with an effective date of 2026-03-10.</p></div>
+        <div class="sec"><div class="lbl">The rule (verbatim)</div><p style="font-size:15.5px;margin:5px 0 0;border-left:3px solid var(--gold);padding-left:12px">No pay or allowance change may be processed for an employee who is not active on the effective date.</p></div>
+        <div class="sec"><div class="lbl">Evidence</div>
+          <table class="ev">
+            <tr><td>amount_fils</td><td>AED 8,200.00</td><td class="src">transaction</td></tr>
+            <tr class="hit"><td>exit_date</td><td>exit 2026-02-28</td><td class="src">employee_master</td></tr>
+            <tr class="hit"><td>status at effective date</td><td>ACTIVE → EXITED</td><td class="src">employee_master</td></tr>
+          </table>
+        </div>
+        <div class="sec"><div class="lbl">Why it matters · next action · routing · severity rationale</div><p style="font-size:15px;margin:5px 0 0" class="mut">Overpayments to leavers are hard to recover → hold payment, confirm status, recover under policy → routed by routing-1.2.0 → CRITICAL because pay eligibility is Critical by policy.</p></div>
+      </div>
+      <ul class="ticks">
+        <li><b>Eight parts</b> on every finding: headline, what broke, verbatim rule, evidence, why it matters, next action, owner and severity, caveats</li>
+        <li>Every evidence value names <b>the record it came from</b>; breaching values are highlighted</li>
+        <li>Severity is a base plus at most two stated modifier steps — the rationale is shown, not implied</li>
+        <li>Routing resolves owner by override → routing table → family overlay, then a <b>conflict-of-interest guard</b> refuses to hand it to a party</li>
+        <li>English and Arabic, <b>RTL first-class</b>, with SLA due dates from the versioned UAE calendar</li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot"><a href="https://youtu.be/QE2QcfPyz8Y">Drawer walkthrough at 0:35 · youtu.be/QE2QcfPyz8Y</a><span>04 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">06</div>
+  <div class="kicker">Responsible AI and security — 20%</div>
+  <h2>The engine decides. <span class="w">A person closes.</span></h2>
+  <div class="body">
+    <div class="cards c2">
+      <div class="card"><h3>Model optional, fact-locked</h3><p>The gateway only rewrites wording. Every number, date and ID must come from the evidence; accusatory phrasing is rejected; any failure falls back to the approved template. <code>ai.mode=none</code> is the default and the demo runs that way.</p></div>
+      <div class="card"><h3>Human decision on every exception</h3><p>Nothing auto-closes. Dismissing a High or Critical finding requires a <b>second analyst's countersign</b> — self-countersigning is refused by the API, as is deciding a case you requested, approved or benefit from.</p></div>
+      <div class="card"><h3>Audit trail that can be verified</h3><p>Append-only, hash-chained: every run, decision, countersign, rule change and export. Tampering fails verification and drives the system into safe halt. <code>mizan audit verify</code> reproduces the head hash offline.</p></div>
+      <div class="card"><h3>Data handling</h3><p>Synthetic data only; a PII scanner blocks real identifiers at upload. Uploads are size-, line- and row-limited with MIME sniffing. Exports escape formula injection. <b>No write credentials exist</b> for any source system.</p></div>
+    </div>
+    <p class="mut" style="margin-top:20px">Pattern alerts are advisory only — never routed, never exported, never scored against a person. Small demographic cells (&lt;5) are suppressed. Full statement: <code>docs/RAI_STATEMENT.md</code>.</p>
+  </div>
+  <div class="foot"><a href="https://youtu.be/QE2QcfPyz8Y">Countersign and audit chain at 1:05 and 1:52 · youtu.be/QE2QcfPyz8Y</a><span>05 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">07</div>
+  <div class="kicker">Deployability and reuse — 15%</div>
+  <h2>Adding a rule is <span class="w">typing a sentence</span></h2>
+  <div class="body">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:28px;align-items:start">
+      <div>
+        <pre><span class="c"># Rule studio — plain English, no model required</span>
+Any allowance change above AED 10,000 must be
+approved by someone at grade 13 or above.
+
+<span class="g">→ comparator &gt;</span>   <span class="g">→ quantifier any</span>   <span class="c">(ambiguity chips, not guesses)</span>
+<span class="g">→ 3 boundary tests generated</span>
+<span class="g">→ backtest 1,061 txns in 0.42 s:</span> would flag 3 · 0.3%
+<span class="g">→ overlap: R04, Jaccard 1.0</span>  <span class="c">— it is already policy</span></pre>
+        <p style="font-size:17px" class="mut">Two-person approval, then a shadow run, before a rule can go active. Every activation is an immutable version with its own hash.</p>
+      </div>
+      <ul class="ticks">
+        <li>Everything that varies is <b>versioned data</b>: routing tables, UAE business calendar, grade ladder, synonyms, severity rubric, SLA policy, action library — editable without a deploy</li>
+        <li>A second business unit loads <b>its own rule pack</b>; packs export and import as YAML with tests and a canonical hash</li>
+        <li>Effective-dated weekend change (Fri–Sat → Sat–Sun, 2022) and provisional public holidays are handled as data with caveats</li>
+        <li>Bilingual EN/AR with RTL layout and bidirectional isolates — built for Emirates and reusable across government entities</li>
+        <li>Runs fully offline: no CDN, no telemetry, bundled fonts and icons</li>
+      </ul>
+    </div>
+  </div>
+  <div class="foot"><a href="https://github.com/BROCKUGANDA/mizan">Rule studio · <code>docs/API.md</code></a><span>06 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">08</div>
+  <div class="kicker">Team and pilot readiness — 10%</div>
+  <h2>Ready to run a pilot <span class="w">next quarter</span></h2>
+  <div class="body">
+    <div class="cards c3" style="margin-bottom:24px">
+      <div class="card"><h3>Weeks 1–2 · Onboarding</h3><p>Load the unit's rules, calendar and routing. Roles mapped from the directory. Baseline run, no routing.</p></div>
+      <div class="card"><h3>Weeks 3–6 · Shadow</h3><p>Findings stored, nothing routes. Target ≥90% measured precision on exceptions a human has decided.</p></div>
+      <div class="card"><h3>Weeks 7–12 · Assisted</h3><p>Live routing and SLA. Weekly metrics: decision coverage 100%, noise ≤10%, deadline adherence ≥90%.</p></div>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:20px">
+      <span class="pill">Analyst</span><span class="pill">Team lead</span><span class="pill">Operations owner</span><span class="pill">Policy author</span><span class="pill">Policy approver</span><span class="pill">Auditor</span><span class="pill">Compliance lead</span><span class="pill">Administrator</span>
+    </div>
+    <p class="mut">Eight roles across ten judge accounts, with a server-enforced permission matrix, queue filters and bulk decisions with typed confirmation, SLA clocks with 75 / 100 / 150% escalation, runbooks RB-01…08 and an on-call rota. Operational modes M0–M5 cover degraded AI, read-only and safe halt — rehearsed, not theoretical.</p>
+  </div>
+  <div class="foot"><a href="https://github.com/BROCKUGANDA/mizan">docs/PILOT_PLAN.md · docs/runbooks/</a><span>07 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="num">09</div>
+  <div class="kicker">Try it</div>
+  <h2>Runnable in <span class="w">four commands</span></h2>
+  <div class="body">
+    <pre>git clone https://github.com/BROCKUGANDA/mizan <span class="c">&amp;&amp; cd mizan</span>
+bun install
+bun run seed     <span class="c"># generates the synthetic pack (seed 42) and loads SQLite</span>
+bun run build <span class="c">&amp;&amp;</span> bun run start   <span class="c"># http://localhost:3000</span></pre>
+    <div class="links" style="margin-bottom:20px">
+      <a class="link" href="https://github.com/BROCKUGANDA/mizan"><span>Repository</span><span class="u">github.com/BROCKUGANDA/mizan</span></a>
+      <a class="link alt" href="https://youtu.be/QE2QcfPyz8Y"><span>Demo video · 2:40</span><span class="u">youtu.be/QE2QcfPyz8Y</span></a>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <span class="pill ok">bun run verify — 12 assurance gates, all green</span>
+      <span class="pill ok">72 tests</span><span class="pill ok">typecheck + lint clean</span><span class="pill ok">production build</span>
+      <span class="pill warn">production seams listed honestly in docs/DEVIATIONS.md</span>
+    </div>
+    <p class="mut" style="margin-top:16px;font-size:17px">Judge accounts switch from the header — no login, because the sandbox holds no real credentials and the role is checked server-side on every write.</p>
+  </div>
+  <div class="foot"><a href="https://github.com/BROCKUGANDA/mizan">MIT licence · public · <code>main</code> only</a><span>08 / 10</span></div>
+</section>
+
+<section class="slide">
+  <div class="strip"></div><div class="strip b"></div>
+  <div class="kicker">The ask</div>
+  <h2>Give MIZAN <span class="w">one HR process</span> for a quarter</h2>
+  <div class="body">
+    <p class="lead">Pick the noisiest process — allowance changes or exits — and run twelve weeks in shadow against its real transaction history. The measure is not how many findings MIZAN produces; it is <b>decision coverage at 100%, noise under 10% and deadlines met nine times in ten</b>, with every one of them traceable to a rule, a record and a named person.</p>
+    <div class="cards c3" style="margin-top:26px">
+      <div class="stat"><div class="v">30%</div><div class="k">of the score is detection — MIZAN proves it against an independent oracle, not against itself</div></div>
+      <div class="stat"><div class="v">45%</div><div class="k">is explanation, routing and responsible AI — the three things an audit function actually has to defend</div></div>
+      <div class="stat"><div class="v">0</div><div class="k">real employee data touched, and none required to start the pilot in shadow</div></div>
+    </div>
+    <div class="links" style="margin-top:26px">
+      <a class="link" href="https://github.com/BROCKUGANDA/mizan"><span>github.com/BROCKUGANDA/mizan</span></a>
+      <a class="link alt" href="https://youtu.be/QE2QcfPyz8Y"><span>youtu.be/QE2QcfPyz8Y</span></a>
+    </div>
+  </div>
+  <div class="foot"><span>MIZAN — ميزان — the balance</span><span>09 / 10</span></div>
+</section>
+
+</body>
+</html>

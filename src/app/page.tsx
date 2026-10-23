@@ -12,7 +12,7 @@
 import { useEffect, useCallback, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { motion, useReducedMotion, AnimatePresence } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { Bell, Command, HelpCircle, Languages, Moon, RotateCcw, Sun, Monitor, Palette } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -139,7 +139,7 @@ function Shell() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <div className="flex min-h-screen flex-col overflow-x-hidden" data-view={view}>
       <a href="#main" className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground">
         {t("app.skipToContent")}
       </a>
@@ -147,7 +147,7 @@ function Shell() {
       <div className="sadu-strip" aria-hidden />
 
       <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
-        <div className="mx-auto flex h-14 max-w-7xl items-center gap-3 px-4">
+        <div className="mx-auto flex min-h-14 max-w-7xl flex-wrap items-center gap-2 px-4 py-2">
           <div className="flex shrink-0 items-center gap-2">
             <div className="brand-mark flex h-8 w-8 shrink-0 items-center justify-center rounded-md font-bold text-primary-foreground" aria-hidden>
               م
@@ -183,7 +183,7 @@ function Shell() {
             ))}
           </nav>
 
-          <div className="ms-auto flex items-center gap-1.5">
+          <div className="ms-auto flex flex-wrap items-center gap-1.5">
             <ModeChip mode={mode} />
             <div className="relative">
               <Button
@@ -302,24 +302,20 @@ function Shell() {
       />
 
       <main id="main" className="mx-auto w-full max-w-7xl flex-1 px-4 py-6">
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.div
-            key={view}
-            initial={reduceMotion ? undefined : { opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={reduceMotion ? undefined : { opacity: 0, y: -8 }}
-            transition={{ duration: 0.2, ease: "easeOut" }}
-          >
+        <motion.div
+          key={view}
+          initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+        >
             {view === "overview" ? <OverviewView /> : null}
             {view === "queue" ? <QueueView /> : null}
             {view === "runs" ? <RunsView /> : null}
             {view === "rules" ? <RulesView /> : null}
             {view === "patterns" ? <PatternsView /> : null}
             {view === "audit" ? <AuditView /> : null}
-            {view === "integrations" ? <IntegrationsView /> : null}
             {view === "settings" ? <SettingsView /> : null}
-          </motion.div>
-        </AnimatePresence>
+        </motion.div>
       </main>
 
       <footer className="mt-auto border-t bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]">
@@ -344,7 +340,6 @@ import RunsView from "@/components/mizan/views/runs-view";
 import RulesView from "@/components/mizan/views/rules-view";
 import PatternsView from "@/components/mizan/views/patterns-view";
 import AuditView from "@/components/mizan/views/audit-view";
-import IntegrationsView from "@/components/mizan/views/integrations-view";
 import SettingsView from "@/components/mizan/views/settings-view";
 
 function ResetSpinner({ open }: { open: boolean }) {

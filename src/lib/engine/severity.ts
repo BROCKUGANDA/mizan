@@ -94,11 +94,11 @@ export function resolveSeverity(input: SeverityInput): SeverityResult {
       const threshold = num("thresholdFils");
       if (amount !== null && threshold !== null && threshold > 0) {
         if (amount >= 2 * threshold || amount >= 10_000_000) {
-          apply(2, "amount at least 2× the limit or AED 100,000 or more", "المبلغ ضعف الحد أو 100,000 درهم أو أكثر");
+          apply(2, "amount far above the limit", "المبلغ أعلى بكثير من الحد");
         } else if (amount >= 1.5 * threshold) {
-          apply(1, "amount 50% or more over the limit", "المبلغ 50% أو أكثر فوق الحد");
+          apply(1, "amount materially over the limit", "المبلغ أعلى من الحد بشكل ملموس");
         }
-        if (amount >= 5_000_000) apply(1, "financial exposure AED 50,000 or more", "التعرض المالي 50,000 درهم أو أكثر");
+        if (amount >= 5_000_000) apply(1, "high financial exposure", "تعرض مالي مرتفع");
       }
       break;
     }
@@ -126,7 +126,7 @@ export function resolveSeverity(input: SeverityInput): SeverityResult {
     }
     case "timing_window": {
       const days = num("backdatedDays") ?? 0;
-      if (days > 90) apply(1, "backdated beyond 90 days", "تأريخ مسبق لأكثر من 90 يوماً");
+      if (days > 90) apply(1, "backdated beyond the review threshold", "تأريخ مسبق يتجاوز حد المراجعة");
       steps.push("closed-payroll-period modifier not applied: no payroll calendar provided");
       stepsAr.push("لم يُطبَّل معدِّل فترة الرواتب المقفلة: لا يوجد تقويم رواتب");
       break;
@@ -139,7 +139,7 @@ export function resolveSeverity(input: SeverityInput): SeverityResult {
     }
     case "value_bounds": {
       const pct = num("pctBps") ?? 0;
-      if (pct >= 3000) apply(1, "increase at least 30%", "زيادة 30% أو أكثر");
+      if (pct >= 3000) apply(1, "large percentage increase", "زيادة نسبية كبيرة");
       break;
     }
     case "eligibility": {

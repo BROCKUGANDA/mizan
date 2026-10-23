@@ -6,8 +6,6 @@
  *
  * Budgets are generous so judge-demo polling (system-state every 10s plus
  * per-view queries) never trips: capacity 300 tokens, refill 10/s per actor.
- * Dry-run endpoints get their own tighter bucket (10/min) because stub
- * probes can be expensive.
  */
 
 const BUCKETS = new Map<string, { tokens: number; last: number }>();
@@ -18,7 +16,15 @@ export interface RateBudget {
 }
 
 export const DEFAULT_BUDGET: RateBudget = { capacity: 300, refillPerSecond: 10 };
-export const DRY_RUN_BUDGET: RateBudget = { capacity: 10, refillPerSecond: 10 / 60 };
+export const ROUTE_BUDGETS = {
+  read: { capacity: 600, refillPerSecond: 10 },
+  decision: { capacity: 120, refillPerSecond: 2 },
+  upload: { capacity: 10, refillPerSecond: 10 / 3600 },
+  run: { capacity: 20, refillPerSecond: 20 / 3600 },
+  export: { capacity: 20, refillPerSecond: 20 / 86400 },
+  check: { capacity: 100, refillPerSecond: 50 },
+  config: { capacity: 120, refillPerSecond: 2 },
+} satisfies Record<string, RateBudget>;
 
 /** Take 1 token; false when the bucket is empty (caller throws MZ-RATE-429). */
 export function takeToken(key: string, budget: RateBudget = DEFAULT_BUDGET, now = Date.now()): boolean {

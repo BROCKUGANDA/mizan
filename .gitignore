@@ -52,3 +52,14 @@ prompt
 server.log
 # Skills directory
 /skills/
+# runtime artefacts
+/data/objects/
+/db/test.db
+/output/
+/reports/
+.tmp-*
+
+# generated/demo database and scratch artifacts
+/db/custom.db
+/upload/
+/tool-results/

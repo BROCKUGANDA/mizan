@@ -192,7 +192,8 @@ export interface RunManifest {
 export interface CensusCounts {
   transactions: number;
   rules: number;
-  checks: number;         // transactions × active rules
+  clauses: number;        // rule clauses evaluated per transaction (multi-clause rules count twice)
+  checks: number;         // transactions × clauses
   applicable: number;
   notApplicable: number;
   evaluated: number;

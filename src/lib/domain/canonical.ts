@@ -51,6 +51,13 @@ export function sha256Json(value: unknown): string {
   return sha256(canonicalJson(value));
 }
 
+/** SHA-256 of raw bytes → lowercase hex. */
+export function sha256Bytes(bytes: Uint8Array): string {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeCrypto = require("node:crypto") as typeof import("node:crypto");
+  return nodeCrypto.createHash("sha256").update(bytes).digest("hex");
+}
+
 /** Crockford base32 display ID from a hex digest, first n chars (e.g. F-XXXXXXXXXXXX). */
 export function crockfordFromHex(hex: string, length = 12): string {
   const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";

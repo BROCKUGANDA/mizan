@@ -145,7 +145,12 @@ export function renderFindingFormatCsv(): string {
   return [header, ...rows].join("\r\n") + "\r\n";
 }
 
+/**
+ * RFC 4180 quoting plus formula-injection neutralisation: a cell that starts
+ * with = + - @ is prefixed with an apostrophe before quoting (§26).
+ */
 export function csvCell(value: string): string {
-  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
-  return value;
+  const safe = /^[=+\-@]/.test(value) ? `'${value}` : value;
+  if (/[",\r\n]/.test(safe)) return `"${safe.replace(/"/g, '""')}"`;
+  return safe;
 }

@@ -85,10 +85,48 @@ export function isSafeFils(n: number): boolean {
   return Number.isSafeInteger(n) && Math.abs(n) <= 9_000_000_000_00; // AED 9bn guard
 }
 
+/**
+ * Infer the decimal convention of a column from its values. A value with both
+ * separators whose last separator has 1–2 trailing digits decides it; otherwise
+ * dot (the pack convention) is the default and ambiguous values get DQ-013.
+ */
+export function inferDecimalConvention(values: string[]): "dot" | "comma" {
+  let dot = 0;
+  let comma = 0;
+  for (const raw of values) {
+    const s = normaliseDigits(raw).replace(/[^\d.,+\-()\s]/g, "").trim();
+    if (!s) continue;
+    const lastDot = s.lastIndexOf(".");
+    const lastComma = s.lastIndexOf(",");
+    if (lastDot >= 0 && lastComma >= 0) {
+      if (lastComma > lastDot) comma++;
+      else dot++;
+      continue;
+    }
+    if (lastComma >= 0) {
+      const after = s.length - lastComma - 1;
+      if (after === 1 || after === 2) comma++;
+      else if (after === 3 && s.split(",").length > 2) dot++;
+    }
+  }
+  return comma > dot ? "comma" : "dot";
+}
+
+/** Group thousands with commas, independent of ICU/locale data (byte determinism). */
+export function groupThousands(n: number): string {
+  const s = String(Math.trunc(Math.abs(n)));
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 === 0) out += ",";
+    out += s[i];
+  }
+  return out;
+}
+
 /** Format fils as "14,500.00" (Western digits). */
 export function formatAED(fils: Fils): string {
   const abs = Math.abs(fils);
-  const whole = Math.floor(abs / 100).toLocaleString("en-US");
+  const whole = groupThousands(Math.floor(abs / 100));
   const frac = String(abs % 100).padStart(2, "0");
   return `${fils < 0 ? "-" : ""}${whole}.${frac}`;
 }

@@ -41,13 +41,11 @@ const SECURITY_HEADERS = [
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  turbopack: { root: process.cwd() },
   async headers() {
     return [{ source: "/(.*)", headers: SECURITY_HEADERS }];
   },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  reactStrictMode: false,
+  reactStrictMode: true,
 };
 
 export default nextConfig;

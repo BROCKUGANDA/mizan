@@ -10,7 +10,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, ChevronRight, Download, FileDown, Loader2, PauseCircle, Play, TriangleAlert } from "lucide-react";
+import { CheckCircle2, ChevronRight, Download, FileDown, Loader2, PauseCircle, Play, TriangleAlert, Upload } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -41,6 +41,7 @@ interface RunStage {
 interface RunCounts {
   transactions?: number;
   rules?: number;
+  clauses?: number;
   checks?: number;
   applicable?: number;
   notApplicable?: number;
@@ -113,6 +114,7 @@ interface ExportBundle {
   profileVersion: string;
   validation: {
     ok: boolean;
+    goldenChecked?: boolean;
     profileVersion: string;
     workedExamples: WorkedExample[];
     structuralErrors: string[];
@@ -175,10 +177,37 @@ function KindBadge({ kind }: { kind: string }) {
 
 export default function RunsView() {
   const { t, locale, iso } = useI18n();
+  const { actor } = useAppStore();
   const qc = useQueryClient();
   const [kind, setKind] = useState<"standard" | "shadow" | "backtest">("standard");
   const [asOf, setAsOf] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [uploadKind, setUploadKind] = useState<"transactions" | "employees">("transactions");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadResult, setUploadResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const uploadMut = useMutation({
+    mutationFn: async (file: File) => {
+      const form = new FormData();
+      form.set("file", file);
+      form.set("kind", uploadKind);
+      form.set("source", "runs-upload");
+      form.set("synthetic", "true");
+      return api<{ dataset: { rows: number; quarantined: number; unknownColumns: string[]; deduplicated: boolean } }>(v1("/datasets"), {
+        method: "POST",
+        body: form,
+        actor,
+      });
+    },
+    onSuccess: async (r) => {
+      setUploadResult({
+        ok: true,
+        text: `${t("runs.uploadDone")} · ${iso(String(r.dataset.rows))} ${t("runs.uploadRows")} · ${iso(String(r.dataset.quarantined))} ${t("runs.uploadQuarantine")} · ${iso(String(r.dataset.unknownColumns.length))} ${t("runs.uploadUnknown")}${r.dataset.deduplicated ? " · deduplicated" : ""}`,
+      });
+      await qc.invalidateQueries();
+    },
+    onError: (err) => setUploadResult({ ok: false, text: `${t("runs.uploadFailed")}: ${err instanceof ApiError ? `${err.code} ${err.message}` : (err as Error).message}` }),
+  });
 
   const runsQuery = useQuery<{ items: RunRow[] }>({
     queryKey: ["runs"],
@@ -243,6 +272,50 @@ export default function RunsView() {
 
   return (
     <div className="space-y-6">
+      {/* ── Dataset upload ─────────────────────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-0">
+          <CardTitle className="text-sm font-medium text-muted-foreground">{t("runs.uploadTitle")}</CardTitle>
+          <p className="text-xs text-muted-foreground">{t("runs.uploadHint")}</p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <Select value={uploadKind} onValueChange={(v) => setUploadKind(v as typeof uploadKind)}>
+              <SelectTrigger className="w-44" aria-label={t("runs.uploadKind")}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="transactions">{t("runs.uploadTransactions")}</SelectItem>
+                <SelectItem value="employees">{t("runs.uploadEmployees")}</SelectItem>
+              </SelectContent>
+            </Select>
+            <Input
+              type="file"
+              accept=".csv,text/csv"
+              aria-label={t("runs.uploadTitle")}
+              onChange={(e) => { setUploadResult(null); setUploadFile(e.target.files?.[0] ?? null); }}
+              className="max-w-xs"
+            />
+            <Button
+              variant="outline"
+              onClick={() => uploadFile && uploadMut.mutate(uploadFile)}
+              disabled={!uploadFile || uploadMut.isPending}
+              aria-busy={uploadMut.isPending}
+            >
+              {uploadMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <Upload className="h-4 w-4" aria-hidden />}
+              {uploadMut.isPending ? t("runs.uploading") : t("runs.uploadButton")}
+            </Button>
+          </div>
+          {uploadResult ? (
+            <Alert variant={uploadResult.ok ? "default" : "destructive"} role={uploadResult.ok ? "status" : "alert"}>
+              {uploadResult.ok ? <CheckCircle2 className="h-4 w-4" aria-hidden /> : <TriangleAlert className="h-4 w-4" aria-hidden />}
+              <AlertTitle>{uploadResult.ok ? t("runs.uploadDone") : t("runs.uploadFailed")}</AlertTitle>
+              <AlertDescription>{uploadResult.text}</AlertDescription>
+            </Alert>
+          ) : null}
+        </CardContent>
+      </Card>
+
       {/* ── Start run + live strip ─────────────────────────────────────────── */}
       <Card>
         <CardHeader className="pb-0">
@@ -305,7 +378,7 @@ export default function RunsView() {
               </ol>
               {typeof liveRun.counts?.checks === "number" && liveRun.counts.checks > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  {iso(String(liveRun.counts.transactions ?? 0))} × {iso(String(liveRun.counts.rules ?? 0))} ={" "}
+                  {iso(String(liveRun.counts.transactions ?? 0))} × {iso(String(liveRun.counts.clauses ?? liveRun.counts.rules ?? 0))} ={" "}
                   {iso(String(liveRun.counts.checks))} {t("runs.checks")}
                 </p>
               ) : null}
@@ -365,7 +438,7 @@ export default function RunsView() {
                 <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
                   {typeof c.checks === "number" && c.checks > 0 ? (
                     <span className="font-mono">
-                      {iso(String(c.transactions ?? 0))} × {iso(String(c.rules ?? 0))} = {iso(String(c.checks))}
+                      {iso(String(c.transactions ?? 0))} × {iso(String(c.clauses ?? c.rules ?? 0))} = {iso(String(c.checks))}
                     </span>
                   ) : null}
                   {typeof c.failed === "number" ? (
@@ -540,7 +613,9 @@ export default function RunsView() {
                           <Alert className="border-ok/40 bg-ok/10 text-foreground [&>svg]:text-ok">
                             <CheckCircle2 className="h-4 w-4" aria-hidden />
                             <AlertTitle>
-                              {t("runs.validatorPassedPrefix")} {iso(`${passed}/${total}`)} {t("runs.validatorPassedSuffix")}
+                              {v.goldenChecked === false
+                                ? (locale === "ar" ? "نجح التحقق البنيوي — تُفحص الأمثلة المرجعية الخمسة على حزمة التدريب (mizan verify)" : "Structural validation passed — the five golden examples are checked on the training pack (mizan verify)")
+                                : <>{t("runs.validatorPassedPrefix")} {iso(`${passed}/${total}`)} {t("runs.validatorPassedSuffix")}</>}
                             </AlertTitle>
                             <AlertDescription>
                               {t("runs.profile")} {v.profileVersion} ·{" "}

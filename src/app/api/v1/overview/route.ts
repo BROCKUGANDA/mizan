@@ -1,10 +1,9 @@
 import { withApiRoute, json } from "@/lib/server/api";
 import { db } from "@/lib/db";
-import { computeReadiness, computeHotspots, computeTrends } from "@/lib/server/analytics";
+import { computeReadiness, computeHotspots, computeTrends, computeMeasuredPrecision } from "@/lib/server/analytics";
 import { coverageReport } from "@/lib/pack/rules";
 import { detectPatterns } from "@/lib/server/patterns";
 import { loadTransactions, loadEmployees } from "@/lib/server/run-pipeline";
-import { wilsonLowerBound } from "@/lib/server/analytics";
 
 export const dynamic = "force-dynamic";
 
@@ -33,10 +32,7 @@ export const GET = withApiRoute(async () => {
       return { groupKey, count, ruleId: sample.ruleId, family: sample.family, headline: sample.headlineEn };
     });
 
-  // Measured precision (Wilson lower bound) over hand-labelled sample = decided non-DQ exceptions
-  const decided = exceptions.filter((e) => e.family !== "data_quality" && !["NEW"].includes(e.status));
-  const confirmed = decided.filter((e) => !["DISMISSED"].includes(e.status)).length;
-  const precisionLB = decided.length ? wilsonLowerBound(confirmed, decided.length) : null;
+  const measuredPrecision = await computeMeasuredPrecision();
 
   return json({
     census: latestRun
@@ -53,7 +49,7 @@ export const GET = withApiRoute(async () => {
     trends,
     topGroups,
     coverage: coverageReport(),
-    measuredPrecision: decided.length ? { decided: decided.length, confirmed, lowerBound: precisionLB, method: "Wilson interval on decided sample" } : null,
+    measuredPrecision,
     patternsSummary: (await (async () => {
       const [transactions, employees] = await Promise.all([loadTransactions(), loadEmployees()]);
       return detectPatterns(transactions, employees).length;

@@ -5,8 +5,60 @@
  * Semantics fixed up front (ADR-0002): above=strict gt, at least=inclusive gte, within N days=inclusive.
  */
 
-import type { RuleSpec, InterpretationRecord, Severity } from "../contracts";
+import type { RuleSpec, InterpretationRecord, Severity, FamilyKind } from "../contracts";
 import { sha256Json } from "../domain/canonical";
+
+/** Facts a rule may reference in scope conditions (MZ-RULE-422 otherwise). */
+export const FACT_CATALOGUE = new Set([
+  "txn.amount_fils", "txn.type", "txn.effective_date", "txn.currency", "txn.department", "txn.location",
+  "employee.nationality", "employee.status", "employee.grade_ordinal", "employee.department", "employee.location",
+  "approver.exists", "approver.grade", "approver.is_line_manager", "approver.depth",
+]);
+
+export const FAMILY_KINDS: FamilyKind[] = [
+  "approval_limit", "approval_count", "approval_chain", "segregation_of_duties",
+  "required_documents", "timing_window", "sequence", "eligibility",
+  "aggregate_limit", "duplicate", "reference_integrity", "value_bounds",
+];
+
+/** Validate a draft/compiled spec before it can be backtested or activated. */
+export function validateRuleSpec(spec: Partial<RuleSpec>): string[] {
+  const errors: string[] = [];
+  if (!spec.id || !/^R[A-Z0-9]{1,4}$/.test(spec.id) || spec.id === "RNEW") errors.push("rule id is not a concrete Rnn");
+  if (!spec.title) errors.push("title is required");
+  if (!spec.family || !FAMILY_KINDS.includes(spec.family)) errors.push(`family is invalid: ${String(spec.family)}`);
+  if (!spec.version) errors.push("version is required");
+  if (!spec.effective?.from) errors.push("effective.from is required");
+  if (!spec.source?.anchor || !spec.source?.text) errors.push("source anchor and verbatim text are required");
+  if (!spec.scope?.transactionTypes?.length) errors.push("scope.transactionTypes is empty");
+  if (!spec.check?.kind || !FAMILY_KINDS.includes(spec.check.kind)) errors.push("check.kind is invalid");
+  if (spec.family && spec.check?.kind && spec.family !== spec.check.kind) errors.push("check.kind must match family");
+  if (!spec.clauses?.length) errors.push("at least one clause is required");
+  if (!spec.tests || spec.tests.length < 3) errors.push("at least three tests (boundary-pass, boundary-fail, out-of-scope) are required");
+  const conditionFacts = (c: RuleSpec["scope"]["where"] | undefined): string[] => {
+    if (!c) return [];
+    if ("all" in c) return c.all.flatMap(conditionFacts);
+    if ("any" in c) return c.any.flatMap(conditionFacts);
+    if ("not" in c) return conditionFacts(c.not);
+    return "fact" in c ? [c.fact] : [];
+  };
+  for (const fact of conditionFacts(spec.scope?.where)) {
+    if (!FACT_CATALOGUE.has(fact)) errors.push(`fact not in the catalogue: ${fact}`);
+  }
+  if (spec.family === "approval_limit") {
+    const p = spec.check?.params ?? {};
+    if (typeof p.minApproverGrade !== "number") errors.push("approval_limit needs minApproverGrade");
+  }
+  if (spec.family === "timing_window") {
+    const p = spec.check?.params ?? {};
+    if (typeof p.maxDays !== "number" && typeof p.minDays !== "number") errors.push("timing_window needs maxDays or minDays");
+  }
+  return errors;
+}
+
+export function ruleLogicHash(spec: RuleSpec): string {
+  return sha256Json({ family: spec.family, scope: spec.scope, check: spec.check, severity: spec.severity, clauses: spec.clauses, effective: spec.effective });
+}
 
 export const PACK_VERSION = "emirates-hr-1.0.0";
 export const ENGINE_VERSION = "engine-1.0.0";

@@ -6,7 +6,10 @@
  */
 
 import { db } from "@/lib/db";
+import type { PrismaClient, Prisma } from "@prisma/client";
 import { canonicalJson, sha256 } from "../domain/canonical";
+
+type AuditClient = PrismaClient | Prisma.TransactionClient;
 
 export interface AuditInput {
   tenantId?: string;
@@ -35,14 +38,14 @@ export function genesisHash(tenantId: string): string {
 }
 
 /** Append one event; returns the computed hash. Caller owns the surrounding transaction scope. */
-export async function appendAudit(input: AuditInput): Promise<{ seq: number; hash: string }> {
+export async function appendAudit(input: AuditInput, client: AuditClient = db): Promise<{ seq: number; hash: string }> {
   const tenantId = input.tenantId ?? "default";
-  const last = await db.auditEvent.findFirst({ where: { tenantId }, orderBy: { seq: "desc" } });
+  const last = await client.auditEvent.findFirst({ where: { tenantId }, orderBy: { seq: "desc" } });
   const prevHash = last?.hash ?? genesisHash(tenantId);
   const at = input.at ?? new Date().toISOString();
   const payloadJson = canonicalJson(redact(input.payload));
   const hash = sha256(prevHash + canonicalJson({ tenantId, at, actor: input.actor, type: input.type, entity: input.entity, entityId: input.entityId, payloadJson }));
-  const row = await db.auditEvent.create({
+  const row = await client.auditEvent.create({
     data: { tenantId, at, actor: input.actor, type: input.type, entity: input.entity, entityId: input.entityId, payloadJson, prevHash, hash },
   });
   return { seq: row.seq, hash: row.hash };

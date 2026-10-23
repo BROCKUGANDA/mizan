@@ -230,7 +230,7 @@ export function canonicalText(parts: ExplanationParts, evidence: Evidence, actio
       `القاعدة ${evidence.ruleId} (الإصدار ${evidence.ruleVersion}): «${evidence.clauseText}»`,
       `أهمية ذلك: ${parts.whyAr}`,
       `الإجراء المقترح: ${actionAr}`,
-      `أُحيلت إلى ${ownerTeamAr}. درجة الخطورة: ${SEVERITY_LABEL_AR[severity]}. ${severityRationaleAr}`,
+      `أُحيلت إلى ${ownerTeamAr}. ${severityRationaleAr || `درجة الخطورة: ${SEVERITY_LABEL_AR[severity]}.`}`,
     ].join("\n\n");
   }
   return [
@@ -239,6 +239,6 @@ export function canonicalText(parts: ExplanationParts, evidence: Evidence, actio
     `Rule ${evidence.ruleId} (version ${evidence.ruleVersion}): "${evidence.clauseText}"`,
     `Why it matters: ${parts.whyEn}`,
     `Suggested action: ${actionEn}`,
-    `Routed to ${ownerTeam}. Severity ${severity}: ${severityRationale}`,
+    `Routed to ${ownerTeam}. ${severityRationale || `Severity ${severity}.`}`,
   ].join("\n\n");
 }

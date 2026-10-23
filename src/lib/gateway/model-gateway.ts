@@ -2,7 +2,7 @@
  * Model gateway (§27 / llm-gateway): adapters none (default), local, provider.
  * The engine NEVER imports this module (separation enforced by review + lint rule).
  * AI is optional: with mode=none the product is fully functional from templates.
- * In the sandbox the `provider` adapter uses z-ai-web-dev-sdk (backend only).
+ * The provider adapter is an approved OpenAI-compatible endpoint configured by the deployment.
  */
 
 import { factLock, type FactLockResult } from "../explain/factlock";
@@ -64,7 +64,7 @@ async function callModel(req: NarrativeRequest, mode: GatewayMode): Promise<stri
   ].join("\n");
 
   if (mode === "local") {
-    // OpenAI-compatible local endpoint (vLLM/Ollama) — integration stub for air-gapped GPU node.
+    // OpenAI-compatible local endpoint (vLLM/Ollama) for an air-gapped GPU node.
     const url = process.env.AI_LOCAL_URL;
     if (!url) throw new Error("AI_LOCAL_URL not configured");
     const res = await fetch(`${url.replace(/\/$/, "")}/v1/chat/completions`, {
@@ -78,14 +78,19 @@ async function callModel(req: NarrativeRequest, mode: GatewayMode): Promise<stri
     return json.choices?.[0]?.message?.content ?? "";
   }
 
-  // provider adapter via the sandbox SDK (zero-retention contract; names redacted below)
-  const { default: ZAI } = await import("z-ai-web-dev-sdk");
-  const zai = await ZAI.create();
-  const completion = await zai.chat.completions.create({
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0,
+  // Approved provider: OpenAI-compatible endpoint under a zero-retention
+  // contract (configured by the deployment; no vendor SDK is bundled).
+  const url = process.env.MIZAN_MODEL_PROVIDER_URL;
+  if (!url) throw new Error("MIZAN_MODEL_PROVIDER_URL not configured");
+  const res = await fetch(`${url.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${process.env.MIZAN_MODEL_PROVIDER_KEY ?? ""}` },
+    body: JSON.stringify({ model: process.env.MIZAN_MODEL_PROVIDER_MODEL ?? "approved", messages: [{ role: "user", content: prompt }], temperature: 0 }),
+    signal: AbortSignal.timeout(8000),
   });
-  return completion.choices[0]?.message?.content ?? "";
+  if (!res.ok) throw new Error(`provider model HTTP ${res.status}`);
+  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return json.choices?.[0]?.message?.content ?? "";
 }
 
 /** Names are redacted before any model call (security red line). */

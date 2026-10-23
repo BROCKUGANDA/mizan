@@ -8,10 +8,10 @@
 import { create } from "zustand";
 import { DEFAULT_ACTOR } from "@/lib/app-config";
 
-export type ViewKey = "overview" | "queue" | "runs" | "rules" | "patterns" | "audit" | "integrations" | "settings";
+export type ViewKey = "overview" | "queue" | "runs" | "rules" | "patterns" | "audit" | "settings";
 
 /** Canonical view order — the one place the shell nav and command palette read. */
-export const VIEW_KEYS: ViewKey[] = ["overview", "queue", "runs", "rules", "patterns", "audit", "integrations", "settings"];
+export const VIEW_KEYS: ViewKey[] = ["overview", "queue", "runs", "rules", "patterns", "audit", "settings"];
 
 export interface AppState {
   view: ViewKey;
@@ -98,3 +98,4 @@ export async function api<T>(
 
 /** Build an absolute API path under /api/v1. */
 export const v1 = (p: string): string => `/api/v1${p}`;
+

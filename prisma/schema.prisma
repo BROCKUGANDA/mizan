@@ -84,6 +84,7 @@ model Dataset {
   id                  String   @id
   kind                String // transactions | employees | policy | finding_format
   sha256              String
+  objectKey           String?
   rows                Int
   issuesJson          String   @default("[]")
   mappingProfileJson  String?
@@ -112,7 +113,30 @@ model Rule {
   actionTemplate     String?
   effectiveFrom      String
   author             String  @default("policy-owner")
+  specHash           String?
+  backtestJson       String?
+  sourceDraftId      String?
+  activatedAt        DateTime?
+  shadowRunId        String?
   updatedAt          DateTime @updatedAt
+}
+
+/// Immutable version history. Editing a rule creates a new version; existing
+/// rows are never rewritten (FS-17 / §16 "versions are immutable").
+model RuleVersion {
+  id            String   @id // ruleId@version
+  ruleId        String
+  version       String
+  specJson      String
+  specHash      String
+  status        String
+  effectiveFrom String
+  author        String
+  backtestJson  String?
+  createdAt     DateTime @default(now())
+
+  @@unique([ruleId, version])
+  @@index([ruleId])
 }
 
 model RuleApproval {
@@ -222,6 +246,25 @@ model Observation {
   @@index([exceptionKey])
 }
 
+/// Immutable per-run finding snapshot. Exports and evidence packs read this,
+/// never the live exception row, so a later run cannot change an older file.
+model RunFinding {
+  id           String @id
+  runId        String
+  rowId        String
+  txnId        String
+  ruleId       String
+  clauseId     String
+  ruleVersion  String
+  severity     String
+  payloadJson  String
+  evidenceHash String
+
+  @@unique([runId, rowId, ruleId, clauseId])
+  @@index([runId])
+  @@index([txnId])
+}
+
 model Decision {
   id             String   @id
   exceptionKey   String
@@ -300,6 +343,7 @@ model DlqItem {
   id          String   @id
   jobKey      String
   queue       String
+  type        String   @default("notification.webhook")
   payloadJson String
   error       String
   attempts    Int      @default(0)
@@ -342,7 +386,17 @@ model EvidencePack {
   scope        String // per-exception key or per-run id
   manifestJson String
   filesJson    String
+  objectKey    String?
   createdAt    DateTime @default(now())
+}
+
+model SlaEscalation {
+  id           String   @id
+  exceptionKey String
+  level        Int
+  sentAt       DateTime @default(now())
+
+  @@unique([exceptionKey, level])
 }
 
 model ProductEvent {

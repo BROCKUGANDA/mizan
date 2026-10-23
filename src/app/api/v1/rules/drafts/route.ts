@@ -4,15 +4,27 @@ import { randomUUID } from "node:crypto";
 import { sha256Json } from "@/lib/domain/canonical";
 
 /** Draft specs carry the engine-required fields so backtests never 500. */
-function completeDraftSpec(spec: Record<string, unknown>, text: string): Record<string, unknown> {
+function completeDraftSpec(spec: Record<string, unknown>, text: string, ruleId: string): Record<string, unknown> {
   return {
     effective: { from: "2025-01-01", to: null, dateBasis: "effective_date" },
-    source: { document: "rule-studio", anchor: "RNEW", text, sha256: sha256Json({ text }) },
     routing: { process: "*" },
     action: { template: "CA-AL-01" },
     explain: { template: "EX-DRAFT" },
     ...spec,
+    id: ruleId,
+    source: { ...(spec.source as Record<string, unknown> | undefined ?? {}), document: "rule-studio", anchor: ruleId, text, sha256: sha256Json({ anchor: ruleId, text }) },
   };
+}
+
+/** A concrete id is allocated up front so backtests and activation share one hash. */
+async function nextRuleId(): Promise<string> {
+  const rows = await db.rule.findMany({ select: { id: true }, orderBy: { id: "desc" } });
+  let max = 15; // R14 definition and R15 attestation are reserved
+  for (const r of rows) {
+    const m = /^R(\d+)$/.exec(r.id);
+    if (m) max = Math.max(max, parseInt(m[1]!, 10));
+  }
+  return `R${String(max + 1).padStart(2, "0")}`;
 }
 
 export const dynamic = "force-dynamic";
@@ -28,12 +40,13 @@ export const POST = withApiRoute(async ({ req, actor }) => {
   }
   const body = (await req.json()) as { text?: string; guided?: { family: string; transactionType: string; threshold?: string; unitGrade?: number; windowDays?: number; max?: number; maxDays?: number } };
   const id = `draft-${randomUUID().slice(0, 8)}`;
+  const ruleId = await nextRuleId();
 
   if (body.guided) {
     const g = body.guided;
     const draft = {
       id, plainEnglish: body.text ?? `${g.transactionType} rule (${g.family})`, status: "draft", author: actor.id,
-      spec: completeDraftSpec(buildGuidedSpec(g), body.text ?? `${g.transactionType} rule (${g.family})`), ambiguities: [],
+      spec: completeDraftSpec(buildGuidedSpec(g), body.text ?? `${g.transactionType} rule (${g.family})`, ruleId), ambiguities: [],
     };
     await db.ruleDraft.create({
       data: { id, plainEnglish: draft.plainEnglish, specJson: JSON.stringify(draft.spec), ambiguitiesJson: "[]", status: "draft", author: actor.id },
@@ -42,7 +55,7 @@ export const POST = withApiRoute(async ({ req, actor }) => {
   }
 
   const parsedRaw = parsePlainEnglish(body.text ?? "");
-  const parsed = { ...parsedRaw, spec: parsedRaw.spec ? completeDraftSpec(parsedRaw.spec, body.text ?? "") : null };
+  const parsed = { ...parsedRaw, spec: parsedRaw.spec ? completeDraftSpec(parsedRaw.spec, body.text ?? "", ruleId) : null };
   await db.ruleDraft.create({
     data: {
       id, plainEnglish: body.text ?? "", specJson: parsed.spec ? JSON.stringify(parsed.spec) : null,
@@ -71,13 +84,19 @@ export function parsePlainEnglish(text: string): ParsedDraft {
   const t = text.toLowerCase();
   const ambiguities: Ambiguity[] = [];
   const typeMatch = /allowance/.test(t) ? "ALLOWANCE_CHANGE" : /pay|salary/.test(t) ? "PAY_CHANGE" : null;
-  const amountMatch = /(?:aed\s*)?([\d,]+(?:\.\d+)?)\s*(?:aed|dirhams?)?/.exec(t.replace(/grade|day/g, ""));
+  const amountText = t.replace(/\bgrade\b/g, "");
+  const amountMatch = /(?:aed\s*)?([\d,]+(?:\.\d+)?)\s*(?:aed|dirhams?)?/.exec(amountText);
   const gradeMatch = /grade\s+(\d+)/.exec(t);
   const daysMatch = /(\d+)\s*(?:calendar\s*|business\s*)?days/.exec(t);
   const withinMatch = /within\s+(\d+)\s*days/.exec(t);
 
   if (typeMatch && amountMatch && /approved|approval/.test(t)) {
-    const comparator = /\bat least|or above|or more\b/.test(t) ? "gte" : "gt";
+    // The comparator belongs to the AMOUNT phrase. "grade 13 or above" is an
+    // approver-grade requirement and must not make the amount inclusive.
+    const before = amountText.slice(Math.max(0, amountMatch.index - 24), amountMatch.index);
+    const after = amountText.slice(amountMatch.index + amountMatch[0].length, amountMatch.index + amountMatch[0].length + 64).split(/\b(?:approved|approval|grade)\b/)[0]!;
+    const amountPhrase = `${before}${amountMatch[0]}${after}`;
+    const comparator = /\b(at least|or above|and above|or more|inclusive)\b/.test(amountPhrase) && !/above\s+(?:aed\s*)?[\d,]/i.test(amountPhrase) ? "gte" : "gt";
     ambiguities.push({ chip: "comparator", options: [">", "≥"], chosen: comparator === "gt" ? ">" : "≥", note: "“above” is strictly greater; “at least / or above” is inclusive (ADR-0002)" });
     ambiguities.push({ chip: "quantifier", options: ["any", "all"], chosen: /all approvers/.test(t) ? "all" : "any", note: "whether one qualifying approver is enough" });
     const thresholdFils = Math.round(parseFloat(amountMatch[1]!.replace(/,/g, "")) * 100);
@@ -110,7 +129,12 @@ export function parsePlainEnglish(text: string): ParsedDraft {
         scope: { transactionTypes: ["HIRE", "PAY_CHANGE", "ALLOWANCE_CHANGE", "TRANSFER", "LEAVE", "EXIT"] },
         check: { kind: "timing_window", params: { fromFact: "effectiveDate", toFact: "submittedDate", maxDays: parseInt(daysMatch[1]!, 10), basis: "calendar", inclusive: true } },
         severity: { base: "MEDIUM", modifiers: ["backdate_90d_high"] },
-        clauses: [{ id: "C1", text }], tests: [],
+        clauses: [{ id: "C1", text }],
+        tests: [
+          { name: "at_the_limit_passes", given: { effectiveDate: "2026-03-01", submittedDate: "2026-03-31" }, expect: "PASS" },
+          { name: "one_day_over_fails", given: { effectiveDate: "2026-03-01", submittedDate: "2026-04-01" }, expect: "FAIL" },
+          { name: "future_dated_passes", given: { effectiveDate: "2026-04-15", submittedDate: "2026-03-31" }, expect: "PASS" },
+        ],
       },
     };
   }
@@ -123,7 +147,12 @@ export function parsePlainEnglish(text: string): ParsedDraft {
         scope: { transactionTypes: [typeMatch] },
         check: { kind: "aggregate_limit", params: { windowDays: parseInt(withinMatch[1]!, 10) * 30, metric: "count", max: /at most (\d+)/.exec(t) ? parseInt(/at most (\d+)/.exec(t)![1]!, 10) : 2, groupBy: "employee", anchor: "effectiveDate" } },
         severity: { base: "MEDIUM", modifiers: [] },
-        clauses: [{ id: "C1", text }], tests: [],
+        clauses: [{ id: "C1", text }],
+        tests: [
+          { name: "at_the_limit_passes", given: { priorCount: 1, max: 2 }, expect: "PASS" },
+          { name: "one_over_fails", given: { priorCount: 2, max: 2 }, expect: "FAIL" },
+          { name: "outside_the_window_is_out_of_scope", given: { priorCount: 0, max: 2 }, expect: "PASS" },
+        ],
       },
     };
   }
@@ -158,7 +187,11 @@ function buildGuidedSpec(g: { family: string; transactionType: string; threshold
       check: { kind: "timing_window", params: { fromFact: "effectiveDate", toFact: "submittedDate", maxDays: g.maxDays ?? 30, basis: "calendar", inclusive: true } },
       severity: { base: "MEDIUM", modifiers: ["backdate_90d_high"] },
       clauses: [{ id: "C1", text: `A ${g.transactionType.toLowerCase()} must not be backdated by more than ${g.maxDays ?? 30} days.` }],
-      tests: [],
+      tests: [
+        { name: "at_the_limit_passes", given: { effectiveDate: "2026-03-01", submittedDate: "2026-03-31" }, expect: "PASS" },
+        { name: "one_day_over_fails", given: { effectiveDate: "2026-03-01", submittedDate: "2026-04-01" }, expect: "FAIL" },
+        { name: "future_dated_passes", given: { effectiveDate: "2026-04-15", submittedDate: "2026-03-31" }, expect: "PASS" },
+      ],
     };
   }
   return {
@@ -167,6 +200,10 @@ function buildGuidedSpec(g: { family: string; transactionType: string; threshold
     check: { kind: "aggregate_limit", params: { windowDays: g.windowDays ?? 365, metric: "count", max: g.max ?? 2, groupBy: "employee", anchor: "effectiveDate" } },
     severity: { base: "MEDIUM", modifiers: [] },
     clauses: [{ id: "C1", text: `At most ${g.max ?? 2} ${g.transactionType.toLowerCase()} changes per employee in ${g.windowDays ?? 365} days.` }],
-    tests: [],
+    tests: [
+      { name: "at_the_limit_passes", given: { priorCount: 1, max: g.max ?? 2 }, expect: "PASS" },
+      { name: "one_over_fails", given: { priorCount: g.max ?? 2, max: g.max ?? 2 }, expect: "FAIL" },
+      { name: "outside_the_window_is_out_of_scope", given: { priorCount: 0, max: g.max ?? 2 }, expect: "PASS" },
+    ],
   };
 }

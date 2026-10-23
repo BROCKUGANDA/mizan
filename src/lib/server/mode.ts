@@ -1,7 +1,7 @@
 /**
  * Mode controller (§3): M0..M5 with precedence M5 > M4 > M3 > M2 > M1 > M0.
  * Source of truth is the database (system_mode). Mode changes write an audit
- * event and an outbox row. Hysteresis lives in the (stubbed) controller loop.
+ * event and an outbox row. The controller loop lives in instrumentation.ts.
  */
 
 import { db } from "@/lib/db";
@@ -24,9 +24,22 @@ export function moreSevere(a: HealthMode, b: HealthMode): HealthMode {
 }
 
 export async function getMode(tenantId = "default"): Promise<{ mode: HealthMode; reason: string | null; operator: string | null; since: string }> {
-  const row = await db.systemMode.findUnique({ where: { tenantId } });
-  if (!row) return { mode: "M0", reason: null, operator: null, since: new Date().toISOString() };
-  return { mode: row.mode as HealthMode, reason: row.reason, operator: row.operator, since: row.since.toISOString() };
+  const [row, aiMode] = await Promise.all([
+    db.systemMode.findUnique({ where: { tenantId } }),
+    db.featureFlag.findUnique({ where: { key: "ai.mode" } }),
+  ]);
+  const stored = (row?.mode as HealthMode) ?? "M0";
+  const since = row?.since.toISOString() ?? new Date().toISOString();
+  // ai.mode=none forces M1 (capability matrix); it never relaxes a more severe mode.
+  if ((aiMode?.value ?? "none") === "none" && MODE_META[stored].severity <= 1) {
+    return {
+      mode: "M1",
+      reason: row?.mode === "M1" && row.reason ? row.reason : "ai.mode=none: narrative polish is off; canonical templates are used",
+      operator: row?.operator ?? null,
+      since,
+    };
+  }
+  return { mode: stored, reason: row?.reason ?? null, operator: row?.operator ?? null, since };
 }
 
 export async function setMode(mode: HealthMode, reason: string, operator: string, tenantId = "default"): Promise<void> {

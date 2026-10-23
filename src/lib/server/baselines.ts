@@ -18,7 +18,8 @@ export async function recomputeBaselines(): Promise<{ fail: Record<string, numbe
   const failBase: Record<string, number> = {};
   const neBase: Record<string, number> = {};
   for (const [ruleId, c] of Object.entries(result.perRule)) {
-    failBase[ruleId] = c.total ? c.failed / c.total : 0;
+    const applicable = c.total - c.notApplicable;
+    failBase[ruleId] = applicable ? c.failed / applicable : 0;
     neBase[ruleId] = c.notEvaluable;
   }
   const baselines = { fail: failBase, notEvaluable: neBase };

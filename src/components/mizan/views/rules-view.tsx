@@ -15,6 +15,7 @@ import {
   ChevronRight,
   CircleCheck,
   FlaskConical,
+  FileDown,
   FileText,
   Lightbulb,
   ListChecks,
@@ -28,6 +29,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -105,6 +107,16 @@ interface RuleItem {
   approvals: RuleApproval[];
 }
 
+interface DraftListItem {
+  id: string;
+  plainEnglish: string;
+  spec: DraftSpec | null;
+  ambiguities: Ambiguity[];
+  status: string;
+  author: string;
+  backtest: { wouldFlag: number; rate: number; failRate?: number; floodRisk: string; specHash?: string } | null;
+}
+
 interface Coverage {
   packVersion: string;
   compiled: { anchor: string; family: string; status: string }[];
@@ -133,6 +145,9 @@ interface BacktestResult {
   wouldFlag: number;
   transactionCount: number;
   rate: number;
+  failRate?: number;
+  applicableChecks?: number;
+  reviewerLoadPerWeek?: number;
   floodRisk: "low" | "medium" | "high";
   overlap: { ruleId: string; count: number; jaccard: number }[];
   sample: { txnId: string; employeeId: string; type: string; amountFils: number | null; effectiveDate: string }[];
@@ -328,11 +343,24 @@ export default function RulesView() {
   const [submitNote, setSubmitNote] = useState<string | null>(null);
   const [approveError, setApproveError] = useState<{ code: string; message: string } | null>(null);
   const [activateError, setActivateError] = useState<string | null>(null);
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [ackDrafts, setAckDrafts] = useState<Record<string, boolean>>({});
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [draftActionNote, setDraftActionNote] = useState<string | null>(null);
+  const [draftActionError, setDraftActionError] = useState<string | null>(null);
+  const [packNote, setPackNote] = useState<string | null>(null);
 
   const rulesQuery = useQuery<{ items: RuleItem[]; interpretations: Record<string, Interpretation>; coverage: Coverage; specCount: number }>({
     queryKey: ["rules"],
     queryFn: () => api(v1("/rules")),
   });
+  const draftsQuery = useQuery<{ items: DraftListItem[] }>({
+    queryKey: ["rule-drafts"],
+    queryFn: () => api(v1("/rules/drafts")),
+    staleTime: POLL.staleMs.rules,
+  });
+  const pendingDrafts = (draftsQuery.data?.items ?? []).filter((d) => ["submitted", "backtested"].includes(d.status));
 
   const rules = rulesQuery.data?.items ?? [];
   const coverage = rulesQuery.data?.coverage;
@@ -443,11 +471,66 @@ export default function RulesView() {
     if (!draft?.id) return;
     setSubmitNote(null);
     setDraftError(null);
-    postJson<{ ok: boolean; status: string }>(v1(`/rules/drafts/${draft.id}/transition`), { action: "submit" }, {
+    postJson<{ ok: boolean; status: string }>(v1(`/rules/drafts/${draft.id}/transition`), { action: "submit", acknowledged: acknowledged || (backtest?.failRate ?? 0) <= 10 }, {
       "idempotency-key": crypto.randomUUID(),
     })
-      .then((r) => setSubmitNote(`Submitted for approval (status: ${r.status}).`))
+      .then((r) => {
+        setSubmitNote(`Submitted for approval (status: ${r.status}).`);
+        void queryClient.invalidateQueries({ queryKey: ["rule-drafts"] });
+      })
       .catch((e: unknown) => setDraftError(e instanceof ApiError ? e.message : (e as Error).message));
+  };
+
+  const onExportPack = async (): Promise<void> => {
+    setPackNote(null);
+    try {
+      const r = await api<{ yaml: string; filename: string; hash: string }>(v1("/rule-packs/export"));
+      const blob = new Blob([r.yaml], { type: "application/yaml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = r.filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      setPackNote(`Exported ${r.filename} · hash ${r.hash.slice(0, 12)}…`);
+    } catch (e) {
+      setPackNote(e instanceof ApiError ? e.message : (e as Error).message);
+    }
+  };
+
+  const onImportPack = async (file: File): Promise<void> => {
+    setPackNote(null);
+    try {
+      const text = await file.text();
+      const res = await fetch(v1("/rule-packs/import"), { method: "POST", headers: { "x-mizan-actor": actor, "content-type": "text/yaml" }, body: text });
+      const data = (await res.json()) as { ok?: boolean; drafts?: { ruleId: string; errors: string[] }[]; hashMatches?: boolean | null; detail?: string };
+      if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
+      const created = (data.drafts ?? []).filter((d) => d.errors.length === 0).map((d) => d.ruleId).join(", ") || "none";
+      setPackNote(`Imported as drafts: ${created}${data.hashMatches === false ? " · declared hash did not match (review)" : ""}`);
+      await queryClient.invalidateQueries({ queryKey: ["rule-drafts"] });
+    } catch (e) {
+      setPackNote(e instanceof Error ? e.message : "Import failed");
+    }
+  };
+
+  const onDraftTransition = (d: DraftListItem, action: "approve" | "reject"): void => {
+    setDraftActionNote(null);
+    setDraftActionError(null);
+    if (action === "reject" && rejectReason.trim().length < 5) {
+      setDraftActionError("A rejection needs a reason of at least 5 characters.");
+      return;
+    }
+    postJson<{ ok: boolean; status: string; ruleId?: string }>(v1(`/rules/drafts/${d.id}/transition`), { action, reason: action === "reject" ? rejectReason.trim() : undefined, acknowledged: ackDrafts[d.id] === true }, {
+      "idempotency-key": crypto.randomUUID(),
+    })
+      .then((r) => {
+        setDraftActionNote(action === "approve" ? `Approved ${r.ruleId ?? d.spec?.id ?? d.id}. Activate it from the rules list (shadow first).` : "Draft rejected.");
+        setRejectingId(null);
+        setRejectReason("");
+        void queryClient.invalidateQueries({ queryKey: ["rules"] });
+        void queryClient.invalidateQueries({ queryKey: ["rule-drafts"] });
+      })
+      .catch((e: unknown) => setDraftActionError(e instanceof ApiError ? e.message : (e as Error).message));
   };
 
   const monthlyBars = useMemo(() => {
@@ -595,7 +678,7 @@ export default function RulesView() {
                       {/* Generated tests */}
                       <div>
                         <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                          <FlaskConical className="h-3.5 w-3.5" aria-hidden /> Generated tests (executable examples from the spec)
+                          <FlaskConical className="h-3.5 w-3.5" aria-hidden /> Boundary tests declared for this rule (the mutation harness proves the same boundaries on data)
                         </p>
                         <TestsTable tests={selected.spec.tests} />
                       </div>
@@ -684,6 +767,27 @@ export default function RulesView() {
               )}
             </div>
           ) : null}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Portable rule packs</CardTitle>
+              <CardDescription>Export the pack as YAML with its tests and canonical hash, or import another business unit&apos;s pack as drafts for review. Import never activates a rule.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap items-center gap-3">
+              <Button size="sm" variant="outline" onClick={() => void onExportPack()}>
+                <FileDown className="me-1.5 h-3.5 w-3.5" aria-hidden /> Export pack YAML
+              </Button>
+              {canDraft ? (
+                <Input
+                  type="file"
+                  accept=".yaml,.yml,text/yaml"
+                  aria-label="Import a YAML rule pack"
+                  className="max-w-xs"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void onImportPack(f); }}
+                />
+              ) : null}
+              {packNote ? <span className="text-xs text-muted-foreground" role="status">{packNote}</span> : null}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* ── Draft tab — plain English → spec without any model ────────────── */}
@@ -820,9 +924,15 @@ export default function RulesView() {
                       <Button type="button" size="sm" variant="outline" onClick={onBacktest}>
                         <FlaskConical className="me-1.5 h-3.5 w-3.5" aria-hidden /> Backtest on 12 months
                       </Button>
-                      <Button type="button" size="sm" onClick={onSubmitDraft} disabled={!draft.id}>
+                      <Button type="button" size="sm" onClick={onSubmitDraft} disabled={!draft.id || !backtest}>
                         <Send className="me-1.5 h-3.5 w-3.5" aria-hidden /> Submit for approval
                       </Button>
+                      {(backtest?.failRate ?? 0) > 10 ? (
+                        <label className="flex items-center gap-2 text-xs text-sev-high">
+                          <Checkbox checked={acknowledged} onCheckedChange={(v) => setAcknowledged(v === true)} aria-label="Acknowledge the high fail rate" />
+                          I acknowledge this rule flags {(backtest?.failRate ?? 0).toFixed(1)}% of applicable history
+                        </label>
+                      ) : null}
                       {submitNote ? (
                         <span className="inline-flex items-center gap-1 text-xs text-ok" role="status">
                           <CircleCheck className="h-3.5 w-3.5" aria-hidden /> {submitNote}
@@ -942,6 +1052,64 @@ export default function RulesView() {
               ) : null}
             </div>
           ) : null}
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Drafts awaiting a second person</CardTitle>
+              <CardDescription>
+                Submit is the author's step; approval is a different policy approver (two-person rule). An approved draft appears in the rules list, where it must be activated as shadow and run before it can go active.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {draftsQuery.isLoading ? <LoadingSkeleton rows={2} /> : null}
+              {!draftsQuery.isLoading && pendingDrafts.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No drafts are waiting. Parse a sentence above to start one.</p>
+              ) : null}
+              {pendingDrafts.map((d) => (
+                <div key={d.id} className="rounded-lg border bg-card p-3">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="flex items-center gap-2 text-sm font-medium">
+                        <span className="font-mono text-xs text-primary">{d.spec?.id ?? d.id}</span>
+                        <Badge variant="outline" className="text-[10px]">{d.status}</Badge>
+                        {d.backtest ? <Badge variant="outline" className="text-[10px]">{iso(String(d.backtest.wouldFlag))} would flag · {(d.backtest.failRate ?? d.backtest.rate).toFixed(1)}%</Badge> : null}
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground">{d.plainEnglish || "Guided-builder draft"}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">author {d.author}</p>
+                    </div>
+                    {canApprove && d.status === "submitted" ? (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(d.backtest?.failRate ?? 0) > 10 ? (
+                          <label className="flex items-center gap-1.5 text-[11px] text-sev-high">
+                            <Checkbox checked={ackDrafts[d.id] === true} onCheckedChange={(v) => setAckDrafts((s) => ({ ...s, [d.id]: v === true }))} aria-label="Acknowledge the high fail rate for this draft" />
+                            acknowledge &gt;10%
+                          </label>
+                        ) : null}
+                        <Button size="sm" onClick={() => onDraftTransition(d, "approve")}>
+                          <ShieldCheck className="me-1.5 h-3.5 w-3.5" aria-hidden /> Approve draft
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setRejectingId(rejectingId === d.id ? null : d.id)}>Reject</Button>
+                      </div>
+                    ) : null}
+                  </div>
+                  {rejectingId === d.id ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <Input value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Reason (at least 5 characters)" aria-label="Rejection reason" className="max-w-sm" />
+                      <Button size="sm" variant="destructive" onClick={() => onDraftTransition(d, "reject")}>Confirm rejection</Button>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+              {draftActionNote ? <p className="text-xs text-ok" role="status">{draftActionNote}</p> : null}
+              {draftActionError ? (
+                <Alert variant="destructive" role="alert">
+                  <TriangleAlert className="h-4 w-4" aria-hidden />
+                  <AlertTitle>Draft action failed</AlertTitle>
+                  <AlertDescription>{draftActionError}</AlertDescription>
+                </Alert>
+              ) : null}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
 

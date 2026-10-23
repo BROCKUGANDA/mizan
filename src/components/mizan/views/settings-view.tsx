@@ -18,6 +18,7 @@ import {
   Loader2,
   OctagonAlert,
   PackageCheck,
+  Sparkles,
   Settings2,
   TriangleAlert,
 } from "lucide-react";
@@ -139,6 +140,9 @@ export default function SettingsView() {
           <TabsTrigger value="evidence">
             <FileArchive className="me-1.5 h-3.5 w-3.5" aria-hidden /> Evidence
           </TabsTrigger>
+          <TabsTrigger value="ai">
+            <Sparkles className="me-1.5 h-3.5 w-3.5" aria-hidden /> How MIZAN uses AI
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="flags" className="mt-4">
           <FlagsTab />
@@ -152,8 +156,56 @@ export default function SettingsView() {
         <TabsContent value="evidence" className="mt-4">
           <EvidenceTab />
         </TabsContent>
+        <TabsContent value="ai" className="mt-4">
+          <AiTab />
+        </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+/* ── How MIZAN uses AI (responsible-AI statement in product) ────────────────── */
+
+function AiTab() {
+  const { locale } = useI18n();
+  const en = [
+    ["The engine decides, the model explains.", "Every exception comes from a deterministic rule. A language model may only polish the narrative; it never scores, routes, assigns severity or closes anything."],
+    ["The model is optional and off by default.", "The judge profile runs with ai.mode=none. Templates are complete on their own; the product has no feature that requires a model."],
+    ["Fact-lock on every model sentence.", "Every number, date and ID must exist in the evidence. A rejected narrative falls back to the canonical template and increments a counter."],
+    ["Only the evidence leaves the process boundary.", "Names are removed before any call. Never a dataset, never free text. The approved provider is contractually zero-retention; a local model is available inside the environment."],
+    ["No tools, no state changes.", "The model cannot call tools, write data or change status. Free text is wrapped as quoted data; instruction-like text is tagged DQ-017 for security review."],
+    ["People remain accountable.", "High and Critical dismissals need a second analyst. Safe halt clears only with chain verification and a second administrator."],
+    ["Kill switch.", "Setting ai.mode=none (or the gateway breaker opening) enters M1 within one control loop: template explanations, no narrative jobs."],
+  ];
+  const ar = [
+    ["المحرك يقرر، والنموذج يشرح فقط.", "كل استثناء يأتي من قاعدة حتمية. قد يحسّن النموذج الصياغة فقط؛ ولا يقيّم أو يوجه أو يحدد الخطورة أو يغلق شيئاً."],
+    ["النموذج اختياري ومتوقف افتراضياً.", "يعمل وضع التحكيم بـ ai.mode=none. القوالب مكتملة بذاتها، ولا توجد ميزة تتطلب نموذجاً."],
+    ["قفل الحقائق على كل جملة.", "كل رقم وتاريخ ومعرّف يجب أن يوجد في الأدلة. وإذا رُفضت الصياغة تُعرض القوالب المعتمدة وتُزاد عدادات الرفض."],
+    ["لا يخرج من النظام إلا الدليل.", "تُزال الأسماء قبل أي استدعاء. لا تُرسل مجموعة بيانات ولا نصوص حرة. المزود المعتمد ملزم بعدم الاحتفاظ، ويمكن استخدام نموذج محلي داخل البيئة."],
+    ["لا أدوات ولا تغيير للحالة.", "لا يستطيع النموذج استدعاء أدوات أو الكتابة أو تغيير الحالة. النصوص الحرة تُعامل كبيانات مقتبسة، والنصوص الشبيهة بالتعليمات تُوسم DQ-017 للمراجعة الأمنية."],
+    ["يبقى البشر مسؤولين.", "رفض الحالات الحرجة والعالية يتطلب محللاً ثانياً. ولا يُرفع التوقف الآمن إلا بعد التحقق من السلسلة ومصادقة مسؤول ثانٍ."],
+    ["مفتاح الإيقاف.", "ضبط ai.mode=none أو فتح قاطع البوابة ينقل النظام إلى M1 خلال دورة تحكم واحدة: شروحات من القوالب دون وظائف صياغة."],
+  ];
+  const rows = locale === "ar" ? ar : en;
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm">{locale === "ar" ? "كيف يستخدم MIZAN الذكاء الاصطناعي" : "How MIZAN uses AI"}</CardTitle>
+        <CardDescription>
+          {locale === "ar"
+            ? "بيان مسؤولية في المنتج. النص الكامل في docs/RAI_STATEMENT.md."
+            : "The in-product responsible-AI statement. The full statement is in docs/RAI_STATEMENT.md."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows.map(([title, body]) => (
+          <div key={title} className="rounded-lg border bg-secondary/30 p-3">
+            <p className="text-sm font-medium">{title}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{body}</p>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -179,6 +231,7 @@ function FlagsTab() {
   const [editing, setEditing] = useState<FlagItem | null>(null);
   const [editValue, setEditValue] = useState("");
   const [reason, setReason] = useState("");
+  const [countersignActor, setCountersignActor] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const query = useQuery<{ items: FlagItem[] }>({
@@ -332,6 +385,7 @@ function ModesTab() {
   const privileged = role === "admin" || role === "compliance_lead";
   const [nextMode, setNextMode] = useState<string>("M0");
   const [reason, setReason] = useState("");
+  const [countersignActor, setCountersignActor] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -341,7 +395,7 @@ function ModesTab() {
   });
 
   const setMode = useMutation({
-    mutationFn: (body: { mode: string; reason: string }) =>
+    mutationFn: (body: { mode: string; reason: string; countersignActor?: string }) =>
       postJson<ModeState>(v1("/system/mode"), body, { "idempotency-key": crypto.randomUUID() }),
     onSuccess: (data) => {
       setError(null);
@@ -361,7 +415,7 @@ function ModesTab() {
       setError("A reason of at least 5 characters is required.");
       return;
     }
-    setMode.mutate({ mode: nextMode, reason: reason.trim() });
+    setMode.mutate({ mode: nextMode, reason: reason.trim(), ...(current === "M5" && nextMode !== "M5" ? { countersignActor: countersignActor.trim() } : {}) });
   };
 
   const current = query.data?.current ?? "M0";
@@ -416,7 +470,13 @@ function ModesTab() {
                 <Label htmlFor="mode-reason" className="text-xs">Reason (required, ≥ 5 characters)</Label>
                 <Input id="mode-reason" value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason for the mode change" />
               </div>
-              <Button size="sm" onClick={onSet} disabled={setMode.isPending || reason.trim().length < 5}>
+              {current === "M5" && nextMode !== "M5" ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="mode-countersign" className="text-xs">Second administrator (must be a different admin; M5 clears through M4 after chain verification)</Label>
+                  <Input id="mode-countersign" value={countersignActor} onChange={(e) => setCountersignActor(e.target.value)} placeholder="admin" aria-label="Countersigning administrator id" />
+                </div>
+              ) : null}
+              <Button size="sm" onClick={onSet} disabled={setMode.isPending || reason.trim().length < 5 || (current === "M5" && nextMode !== "M5" && countersignActor.trim().length === 0)}>
                 {setMode.isPending ? <Loader2 className="me-1.5 h-3.5 w-3.5 animate-spin" aria-hidden /> : <Settings2 className="me-1.5 h-3.5 w-3.5" aria-hidden />}
                 Set mode to {nextMode}
               </Button>
@@ -468,7 +528,7 @@ function OutboxTab() {
       <CardHeader className="pb-3">
         <CardTitle className="text-sm">Outbox</CardTitle>
         <CardDescription>
-          Delivery relay (transactional outbox): notifications are written with the decision, then delivered in-app first. Email and webhook channels are integration stubs in the sandbox.
+          Delivery relay (transactional outbox): notifications are written with the decision and delivered in-app first. Email and webhook channels activate only when their flag and endpoint are configured; failures dead-letter and can be replayed.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

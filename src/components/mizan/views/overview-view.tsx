@@ -41,6 +41,7 @@ interface Census {
   holds: RunHold[];
   transactions?: number;
   rules?: number;
+  clauses?: number;
   checks?: number;
   applicable?: number;
   notApplicable?: number;
@@ -111,8 +112,9 @@ interface Coverage {
 }
 
 interface MeasuredPrecision {
-  decided: number;
-  confirmed: number;
+  sampleSize: number;
+  correct: number;
+  incorrect: number;
   lowerBound: number;
   method: string;
 }
@@ -452,8 +454,8 @@ export default function OverviewView() {
                 <AnimatedNum value={census.transactions ?? 0} />
                 <span className="text-muted-foreground">{t("overview.transactions")}</span>
                 <span className="text-muted-foreground" aria-hidden>×</span>
-                <AnimatedNum value={census.rules ?? 0} />
-                <span className="text-muted-foreground">{t("overview.rules")}</span>
+                <AnimatedNum value={census.clauses ?? census.rules ?? 0} />
+                <span className="text-muted-foreground">{t("overview.clauses")}</span>
                 <span className="text-muted-foreground" aria-hidden>=</span>
                 <AnimatedNum value={census.checks ?? 0} />
                 <span className="text-muted-foreground">{t("overview.checks")}</span>
@@ -766,7 +768,7 @@ export default function OverviewView() {
                   {iso(`${(d.measuredPrecision.lowerBound * 100).toFixed(1)}%`)}
                 </span>
                 <span className="text-xs text-muted-foreground">
-                  {iso(`${d.measuredPrecision.confirmed}/${d.measuredPrecision.decided}`)}{" "}
+                  {iso(`${d.measuredPrecision.correct}/${d.measuredPrecision.sampleSize}`)}{" "}
                   {t("overview.confirmedDecisions")}
                 </span>
                 <p className="w-full text-xs text-muted-foreground">{d.measuredPrecision.method}</p>

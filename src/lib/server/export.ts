@@ -5,7 +5,8 @@
  */
 
 import { EXPORT_PROFILE, csvCell, GENERATED_COLUMNS } from "../pack/finding-format";
-import { canonicalJson, sha256 } from "../domain/canonical";
+import { sha256 } from "../domain/canonical";
+import { cmpStr } from "../domain/dates";
 
 export interface FindingRow {
   finding_id: string;
@@ -30,17 +31,18 @@ export interface DqRow {
   rowNumber: number;
 }
 
-const GOLDEN_DISPLAY_IDS = new Map(EXPORT_PROFILE.goldenRows.map((r) => [r.transaction_id, r.finding_id]));
+const goldenKey = (r: { transaction_id?: string; rule_id?: string; clause_id?: string }): string => `${r.transaction_id ?? ""}|${r.rule_id ?? ""}|${r.clause_id ?? ""}`;
+const GOLDEN_DISPLAY_IDS = new Map(EXPORT_PROFILE.goldenRows.map((r) => [goldenKey(r), r.finding_id]));
 
 export function renderFindingsCsv(rows: FindingRow[]): string {
   const sorted = [...rows].sort((a, b) =>
-    a.ruleId.localeCompare(b.ruleId) || a.txnId.localeCompare(b.txnId) || a.clauseId.localeCompare(b.clauseId)
+    cmpStr(a.ruleId, b.ruleId) || cmpStr(a.txnId, b.txnId) || cmpStr(a.clauseId, b.clauseId)
   );
   const header = EXPORT_PROFILE.columns.map((c) => c.header).join(",");
   const body = sorted.map((r) =>
     EXPORT_PROFILE.columns.map((c) => {
       switch (c.header) {
-        case "finding_id": return csvCell(GOLDEN_DISPLAY_IDS.get(r.txnId) ?? r.finding_id);
+        case "finding_id": return csvCell(GOLDEN_DISPLAY_IDS.get(goldenKey({ transaction_id: r.txnId, rule_id: r.ruleId, clause_id: r.clauseId })) ?? r.finding_id);
         case "transaction_id": return csvCell(r.txnId);
         case "rule_id": return csvCell(r.ruleId);
         case "rule_version": return csvCell(r.ruleVersion);
@@ -78,6 +80,7 @@ export interface WorkedExampleResult {
 
 export interface ExportValidation {
   ok: boolean;
+  goldenChecked: boolean;
   profileVersion: string;
   workedExamples: WorkedExampleResult[];
   structuralErrors: string[];
@@ -90,28 +93,52 @@ export interface ExportValidation {
  * 1. structural pass — header exact, RFC 4180 round-trip, row count;
  * 2. worked-example pass — the 5 golden rows reproduced exactly on every scored column.
  */
-export function validateFindingsCsv(csv: string): ExportValidation {
+export function validateFindingsCsv(csv: string, opts: { requireGolden?: boolean } = {}): ExportValidation {
   const structuralErrors: string[] = [];
   const header = csv.split("\r\n")[0] ?? "";
   const expectedHeader = EXPORT_PROFILE.columns.map((c) => c.header).join(",");
   if (header !== expectedHeader) structuralErrors.push(`header mismatch: expected "${expectedHeader}"`);
   if (!csv.endsWith("\r\n")) structuralErrors.push("file must end with CRLF");
-
-  // parse rows (RFC 4180)
   const rows = parseCsvRows(csv);
-  const byTxn = new Map<string, Record<string, string>>();
-  for (const row of rows) {
+  if (!rows.length) structuralErrors.push("file has no header row");
+  const dataRows = rows.slice(1);
+  const byKey = new Map<string, Record<string, string>[]>();
+  const seenFindingIds = new Set<string>();
+
+  for (const [index, row] of dataRows.entries()) {
+    if (row.length !== EXPORT_PROFILE.columns.length) {
+      structuralErrors.push(`row ${index + 2} has ${row.length} columns; expected ${EXPORT_PROFILE.columns.length}`);
+      continue;
+    }
     const obj: Record<string, string> = {};
     EXPORT_PROFILE.columns.forEach((c, i) => { obj[c.header] = row[i] ?? ""; });
-    if (obj.transaction_id) byTxn.set(obj.transaction_id, obj);
+    const key = goldenKey({ transaction_id: obj.transaction_id ?? "", rule_id: obj.rule_id ?? "", clause_id: obj.clause_id ?? "" });
+    const list = byKey.get(key) ?? [];
+    list.push(obj);
+    byKey.set(key, list);
+    if (seenFindingIds.has(obj.finding_id ?? "")) structuralErrors.push(`row ${index + 2}: duplicate finding_id ${obj.finding_id}`);
+    seenFindingIds.add(obj.finding_id ?? "");
+    if (!obj.transaction_id) structuralErrors.push(`row ${index + 2}: transaction_id is empty`);
+    if (!/^R[0-9]{2}$/.test(obj.rule_id ?? "")) structuralErrors.push(`row ${index + 2}: rule_id "${obj.rule_id}" is not Rnn`);
+    if (!/^C[0-9]+$/.test(obj.clause_id ?? "")) structuralErrors.push(`row ${index + 2}: clause_id "${obj.clause_id}" is not Cnn`);
+    if (!["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(obj.severity ?? "")) structuralErrors.push(`row ${index + 2}: severity "${obj.severity}" is not an enum value`);
+    if (!/^F-[A-Z0-9]{12}$/.test(obj.finding_id ?? "")) structuralErrors.push(`row ${index + 2}: finding_id "${obj.finding_id}" does not match F-CCCCCCCCCCCC`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(obj.run_date ?? "")) structuralErrors.push(`row ${index + 2}: run_date "${obj.run_date}" is not YYYY-MM-DD`);
+    for (const required of ["rule_version", "headline", "what_broke", "why_it_matters", "corrective_action", "owner_team"]) {
+      if (!obj[required]) structuralErrors.push(`row ${index + 2}: ${required} is empty`);
+    }
   }
 
-  const workedExamples: WorkedExampleResult[] = EXPORT_PROFILE.goldenRows.map((golden) => {
-    const actual = byTxn.get(golden.transaction_id);
+  const requireGolden = opts.requireGolden ?? true;
+  const workedExamples: WorkedExampleResult[] = !requireGolden ? [] : EXPORT_PROFILE.goldenRows.map((golden) => {
+    const matches = byKey.get(goldenKey({ transaction_id: golden.transaction_id, rule_id: golden.rule_id, clause_id: golden.clause_id })) ?? [];
     const mismatches: { column: string; expected: string; actual: string }[] = [];
-    if (!actual) {
+    if (!matches.length) {
       mismatches.push({ column: "row", expected: "present", actual: "missing" });
+    } else if (matches.length > 1) {
+      mismatches.push({ column: "row", expected: "exactly one row", actual: `${matches.length} rows` });
     } else {
+      const actual = matches[0]!;
       for (const col of EXPORT_PROFILE.columns) {
         if (!col.scored || GENERATED_COLUMNS.includes(col.header)) continue;
         if ((actual[col.header] ?? "") !== (golden[col.header] ?? "")) {
@@ -122,13 +149,14 @@ export function validateFindingsCsv(csv: string): ExportValidation {
     return { transactionId: golden.transaction_id, ok: mismatches.length === 0, mismatches };
   });
 
-  const ok = structuralErrors.length === 0 && workedExamples.every((w) => w.ok);
+  const ok = structuralErrors.length === 0 && (!requireGolden || workedExamples.every((w) => w.ok));
   return {
     ok,
+    goldenChecked: requireGolden,
     profileVersion: EXPORT_PROFILE.version,
     workedExamples,
     structuralErrors,
-    findingsSha256: sha256(canonicalJson({ header, rows: rows.length })),
+    findingsSha256: sha256(csv),
     checkedAt: new Date().toISOString(),
   };
 }

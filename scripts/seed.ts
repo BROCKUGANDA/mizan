@@ -7,7 +7,7 @@ import { generatePack } from "../src/lib/pack/generate";
 import { RULE_SPECS, NON_CHECK_SENTENCES, coverageReport, INTERPRETATIONS } from "../src/lib/pack/rules";
 import { EXPORT_PROFILE } from "../src/lib/pack/finding-format";
 import { parseCsv, normaliseTransactions, normaliseEmployees } from "../src/lib/normalize";
-import { sha256 } from "../src/lib/domain/canonical";
+import { sha256, sha256Json } from "../src/lib/domain/canonical";
 import { db } from "../src/lib/db";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { randomUUID } from "node:crypto";
@@ -38,6 +38,7 @@ async function main(): Promise<void> {
     ["policy-approver", "Policy Approver", "policy_approver", null],
     ["auditor", "Auditor", "auditor", null],
     ["admin", "Administrator", "admin", null],
+    ["admin-2", "Administrator Two", "admin", null],
   ];
   for (const [id, name, role, employeeId] of actors) {
     await db.actor.upsert({ where: { id }, create: { id, name, role, employeeId }, update: { name, role, employeeId } });
@@ -52,30 +53,43 @@ async function main(): Promise<void> {
       interpretationJson: JSON.stringify(INTERPRETATIONS[spec.id] ?? {}), baseSeverity: spec.severity.base,
       modifiersJson: JSON.stringify(spec.severity.modifiers), routingProcess: spec.routing.process,
       actionTemplate: spec.action.template, effectiveFrom: spec.effective.from, author: "policy-owner",
+      specHash: sha256Json(spec), backtestJson: null, sourceDraftId: null, activatedAt: null, shadowRunId: null,
     };
     await db.rule.upsert({ where: { id: spec.id }, create: { id: spec.id, ...data }, update: data });
+    await db.ruleVersion.upsert({
+      where: { ruleId_version: { ruleId: spec.id, version: spec.version } },
+      create: { id: `${spec.id}@${spec.version}`, ruleId: spec.id, version: spec.version, specJson: JSON.stringify(spec), specHash: sha256Json(spec), status: spec.status, effectiveFrom: spec.effective.from, author: "policy-owner" },
+      update: {},
+    });
   }
 
   // Datasets + normalised rows (and every derived artefact, so the seed is a full reset)
+  await db.slaEscalation.deleteMany({});
+  await db.runFinding.deleteMany({});
   await db.observation.deleteMany({});
   await db.decision.deleteMany({});
   await db.comment.deleteMany({});
   await db.exception.deleteMany({});
+  await db.evidencePack.deleteMany({});
+  await db.auditEvent.deleteMany({});
+  await db.dlqItem.deleteMany({});
+  await db.productEvent.deleteMany({});
   await db.run.deleteMany({});
   await db.outbox.deleteMany({});
   await db.inbox.deleteMany({});
   await db.idempotencyKey.deleteMany({});
   await db.patternAlert.deleteMany({});
+  await db.ruleVersion.deleteMany({});
   await db.ruleDraft.deleteMany({});
   await db.txn.deleteMany({});
   await db.employee.deleteMany({});
   await db.dataset.deleteMany({});
 
-  const txParsed = parseCsv(pack.transactionsCsv, ",");
-  const issues = { quarantined: [], dqByRow: {}, dateOrderDefaulted: false };
-  const transactions = normaliseTransactions(txParsed, "ds-transactions-42", issues);
   const empParsed = parseCsv(pack.employeesCsv, ",");
   const { employees, issues: empIssues } = normaliseEmployees(empParsed, "ds-employees-42");
+  const txParsed = parseCsv(pack.transactionsCsv, ",");
+  const issues = { quarantined: [], dqByRow: {}, dateOrderDefaulted: false };
+  const transactions = normaliseTransactions(txParsed, "ds-transactions-42", issues, { employeeIds: new Set(employees.map((e) => e.employeeId)), asOf: "2026-04-01" });
 
   await db.dataset.create({ data: { id: "ds-transactions-42", kind: "transactions", sha256: sha256(pack.transactionsCsv), rows: transactions.length, issuesJson: JSON.stringify({ quarantined: issues.quarantined, dateOrderDefaulted: issues.dateOrderDefaulted }) } });
   await db.dataset.create({ data: { id: "ds-employees-42", kind: "employees", sha256: sha256(pack.employeesCsv), rows: employees.length, issuesJson: JSON.stringify({ quarantined: empIssues.quarantined }) } });
@@ -149,7 +163,8 @@ async function main(): Promise<void> {
   const failBase: Record<string, number> = {};
   const neBase: Record<string, number> = {};
   for (const [ruleId, c] of Object.entries(result.perRule)) {
-    failBase[ruleId] = c.total ? c.failed / c.total : 0;
+    const applicable = c.total - c.notApplicable;
+    failBase[ruleId] = applicable ? c.failed / applicable : 0;
     neBase[ruleId] = c.notEvaluable;
   }
   const baselinePayload = JSON.stringify({ fail: failBase, notEvaluable: neBase });

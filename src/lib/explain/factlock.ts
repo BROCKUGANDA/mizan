@@ -40,6 +40,7 @@ export function factLock(
     add(f.value);
   }
   add(evidence.ruleId);
+  add(evidence.ruleVersion);
   add(evidence.clauseId);
   for (const rel of evidence.relatedTxnIds) add(rel);
   for (const c of evidence.caveats) { add(c.message.en); add(c.message.ar); }
@@ -60,7 +61,8 @@ export function factLock(
   if (!text.includes(opts.requiredAction.slice(0, 24))) return { ok: false, rejection: "FL-ACTION", detail: "action missing" };
   if (BANNED_EN.test(text) || BANNED_AR.test(text)) return { ok: false, rejection: "FL-BANNED", detail: "accusatory term" };
   const words = text.split(/\s+/).filter(Boolean);
-  if (words.length > 120 || text.length > opts.canonicalLength * 1.5 + 200) return { ok: false, rejection: "FL-LENGTH", detail: `${words.length} words` };
+  // The canonical text may be long; fact-lock bounds only runaway model output.
+  if (text.length > opts.canonicalLength * 1.5 + 200) return { ok: false, rejection: "FL-LENGTH", detail: `${words.length} words, ${text.length} chars` };
   const hasArabic = /[\u0600-\u06FF]/.test(text);
   if (opts.locale === "ar" && !hasArabic) return { ok: false, rejection: "FL-LOCALE", detail: "no Arabic script" };
   if (opts.locale === "en" && hasArabic && text.length < 40) return { ok: false, rejection: "FL-LOCALE", detail: "mostly Arabic for en request" };

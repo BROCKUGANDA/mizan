@@ -11,7 +11,7 @@ import type {
 import { buildIndexes, type EngineIndexes } from "./facts";
 import { evaluateFamily, type FamilyEval } from "./families";
 import { sha256Json } from "../domain/canonical";
-import type { LocalDate } from "../domain/dates";
+import { cmpStr, type LocalDate } from "../domain/dates";
 
 export interface EngineConfig {
   calendarVersion: string;
@@ -88,54 +88,67 @@ function evidenceHash(e: Evidence | null): string | null {
 
 export function evaluate(input: EvaluateInput): EvaluateOutput {
   const indexes: EngineIndexes = buildIndexes(input.transactions, input.employees);
-  const rules = [...input.pack].sort((a, b) => a.id.localeCompare(b.id));
-  const txns = [...input.transactions].sort((a, b) => a.rowId.localeCompare(b.rowId));
+  const versionsById = new Map<string, RuleSpec[]>();
+  for (const rule of input.pack) {
+    const list = versionsById.get(rule.id) ?? [];
+    list.push(rule);
+    versionsById.set(rule.id, list);
+  }
+  const rules = [...versionsById.values()].map((versions) => selectLatestVersion(versions));
+  const ruleIds = [...versionsById.keys()].sort(cmpStr);
+  const latestById = new Map(rules.map((r) => [r.id, r]));
+  const txns = [...input.transactions].sort((a, b) => cmpStr(a.rowId, b.rowId));
 
   const results: CheckResult[] = [];
   const perRule: EvaluateOutput["perRule"] = {};
-  for (const r of rules) perRule[r.id] = { total: 0, pass: 0, notApplicable: 0, notEvaluable: 0, failed: 0 };
+  for (const id of ruleIds) perRule[id] = { total: 0, pass: 0, notApplicable: 0, notEvaluable: 0, failed: 0 };
+
+  const emitNotApplicable = (txn: Transaction, rule: RuleSpec): void => {
+    for (const clause of rule.clauses) {
+      perRule[rule.id]!.total++;
+      perRule[rule.id]!.notApplicable++;
+      results.push({ runId: input.runId, rowId: txn.rowId, txnId: txn.txnId, ruleId: rule.id, ruleVersion: rule.version, clauseId: clause.id, outcome: "NOT_APPLICABLE", evidence: null, evidenceHash: null, dq: [] });
+    }
+  };
+  const emitNotEvaluable = (txn: Transaction, rule: RuleSpec, dq: DqCode, caveat: Caveat): void => {
+    for (const clause of rule.clauses) {
+      const ev = notEvaluableEvidence(rule, clause.id, txn, [caveat], input.config);
+      perRule[rule.id]!.total++;
+      perRule[rule.id]!.notEvaluable++;
+      results.push({ runId: input.runId, rowId: txn.rowId, txnId: txn.txnId, ruleId: rule.id, ruleVersion: rule.version, clauseId: clause.id, outcome: "NOT_EVALUABLE", evidence: ev, evidenceHash: evidenceHash(ev), dq: [dq] });
+    }
+  };
 
   for (const txn of txns) {
-    for (const rule of rules) {
-      // Rule version selection by effective date (single-version pack in v1; effective-dating recorded)
-      if (rule.effective.from > (txn.effectiveDate ?? input.asOf) && rule.effective.dateBasis === "effective_date" && txn.effectiveDate) {
-        // rule not yet in force at the transaction's effective date → NOT_APPLICABLE
-        for (const clause of rule.clauses) {
-          perRule[rule.id]!.total++;
-          perRule[rule.id]!.notApplicable++;
-          results.push({ runId: input.runId, rowId: txn.rowId, txnId: txn.txnId, ruleId: rule.id, ruleVersion: rule.version, clauseId: clause.id, outcome: "NOT_APPLICABLE", evidence: null, evidenceHash: null, dq: [] });
-        }
-        continue;
-      }
+    const effective = txn.effectiveDate ?? input.asOf;
+    for (const id of ruleIds) {
+      const versions = versionsById.get(id)!;
+      const rule = selectVersionInForce(versions, effective) ?? latestById.get(id)!;
+      const inForce = selectVersionInForce(versions, effective);
+      if (!inForce) { emitNotApplicable(txn, rule); continue; }
       // Type-scoped rules on an unknown type → NOT_EVALUABLE (EC-A12), never silently skipped
       const typeScoped = !rule.scope.transactionTypes.includes(txn.type);
       const unknownType = txn.type === "UNKNOWN";
       if (typeScoped && unknownType) {
-        for (const clause of rule.clauses) {
-          const ev = notEvaluableEvidence(rule, clause.id, txn, [{ code: "DQ-006", message: { en: `Transaction type "${txn.typeRaw}" is unknown, so this rule cannot run.`, ar: `نوع المعاملة "${txn.typeRaw}" غير معروف، لذا لا يمكن تنفيذ هذه القاعدة.` }, facts: [txn.typeRaw] }], input.config);
-          perRule[rule.id]!.total++;
-          perRule[rule.id]!.notEvaluable++;
-          results.push({ runId: input.runId, rowId: txn.rowId, txnId: txn.txnId, ruleId: rule.id, ruleVersion: rule.version, clauseId: clause.id, outcome: "NOT_EVALUABLE", evidence: ev, evidenceHash: evidenceHash(ev), dq: ["DQ-006"] });
-        }
+        emitNotEvaluable(txn, rule, "DQ-006", { code: "DQ-006", message: { en: `Transaction type "${txn.typeRaw}" is unknown, so this rule cannot run.`, ar: `نوع المعاملة "${txn.typeRaw}" غير معروف، لذا لا يمكن تنفيذ هذه القاعدة.` }, facts: [txn.typeRaw] });
         continue;
       }
-      if (typeScoped) {
-        for (const clause of rule.clauses) {
-          perRule[rule.id]!.total++;
-          perRule[rule.id]!.notApplicable++;
-          results.push({ runId: input.runId, rowId: txn.rowId, txnId: txn.txnId, ruleId: rule.id, ruleVersion: rule.version, clauseId: clause.id, outcome: "NOT_APPLICABLE", evidence: null, evidenceHash: null, dq: [] });
-        }
-        continue;
-      }
+      if (typeScoped) { emitNotApplicable(txn, rule); continue; }
       // Scope preconditions (e.g. amount above threshold). Unknown fact → NOT_EVALUABLE (unknown is not pass).
       if (rule.scope.where) {
         const scopeResult = evalCondition(rule.scope.where, txnFacts(txn));
-        if (scopeResult === false) {
-          for (const clause of rule.clauses) {
-            perRule[rule.id]!.total++;
-            perRule[rule.id]!.notApplicable++;
-            results.push({ runId: input.runId, rowId: txn.rowId, txnId: txn.txnId, ruleId: rule.id, ruleVersion: rule.version, clauseId: clause.id, outcome: "NOT_APPLICABLE", evidence: null, evidenceHash: null, dq: [] });
-          }
+        if (scopeResult === false) { emitNotApplicable(txn, rule); continue; }
+        if (scopeResult === null) {
+          const code = txn.dq.find((d) => d === "DQ-013" || d === "DQ-009") ?? "DQ-001";
+          emitNotEvaluable(txn, rule, code, {
+            code,
+            message: code === "DQ-013"
+              ? { en: "The amount is ambiguous, so this rule's scope cannot be decided.", ar: "المبلغ غامض، لذا لا يمكن تحديد نطاق هذه القاعدة." }
+              : code === "DQ-009"
+                ? { en: "The currency is not AED, so amount thresholds cannot be applied.", ar: "العملة ليست الدرهم، لذا لا يمكن تطبيق حدود المبالغ." }
+                : { en: "A field needed to decide whether this rule applies is missing.", ar: "حقل مطلوب لتحديد انطباق هذه القاعدة غير موجود." },
+            facts: [],
+          });
           continue;
         }
       }
@@ -153,13 +166,19 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
             slots: {}, relatedTxnIds: [],
           };
         }
+        const baseFacts: EvidenceFact[] = [
+          { name: "txn_id", value: txn.txnId, display: { en: txn.txnId, ar: txn.txnId }, source: "transaction", path: "txn.txn_id", breaching: false },
+          { name: "employee_id", value: txn.employeeId, display: { en: txn.employeeId, ar: txn.employeeId }, source: "transaction", path: "txn.employee_id", breaching: false },
+        ];
+        const factByName = new Map<string, EvidenceFact>();
+        for (const f of [...baseFacts, ...fe.facts]) if (!factByName.has(f.name)) factByName.set(f.name, f);
         const ev: Evidence = {
           ruleId: rule.id,
           ruleVersion: rule.version,
           clauseId: clause.id,
           clauseText: rule.clauses.find((c) => c.id === clause.id)?.text ?? rule.clauses[0]!.text,
           sourceAnchor: rule.source.anchor,
-          facts: fe.facts,
+          facts: [...factByName.values()],
           requirement: fe.requirement,
           comparison: fe.comparison,
           relatedTxnIds: fe.relatedTxnIds,
@@ -185,6 +204,16 @@ export function evaluate(input: EvaluateInput): EvaluateOutput {
   const counts = census(txns, rules, results, input.quarantined ?? 0);
   const outputHash = computeOutputHash(results);
   return { results, counts, perRule, outputHash, quarantined: input.quarantined ?? 0 };
+}
+
+function selectLatestVersion(versions: RuleSpec[]): RuleSpec {
+  return [...versions].sort((a, b) => cmpStr(b.effective.from, a.effective.from) || cmpStr(b.version, a.version))[0]!;
+}
+
+function selectVersionInForce(versions: RuleSpec[], date: LocalDate): RuleSpec | null {
+  const inForce = versions.filter((r) => r.effective.from <= date && (r.effective.to === null || date <= r.effective.to));
+  if (!inForce.length) return null;
+  return [...inForce].sort((a, b) => cmpStr(b.effective.from, a.effective.from) || cmpStr(b.version, a.version))[0]!;
 }
 
 function dedupeCaveats(caveats: Caveat[]): Caveat[] {
@@ -222,9 +251,11 @@ export function census(txns: Transaction[], rules: RuleSpec[], results: CheckRes
   const failed = results.filter((r) => r.outcome === "FAIL").length;
   const applicable = total - notApplicable;
   const evaluated = applicable - notEvaluable;
+  const clauses = rules.reduce((acc, r) => acc + r.clauses.length, 0);
   return {
     transactions: txns.length,
     rules: rules.length,
+    clauses,
     checks: total,
     applicable,
     notApplicable,
@@ -236,6 +267,16 @@ export function census(txns: Transaction[], rules: RuleSpec[], results: CheckRes
     held: 0,
     dqExceptions: 0,
   };
+}
+
+/** FS-02: every transaction × clause pair has exactly one outcome and the arithmetic reconciles. */
+export function assertCensus(counts: CensusCounts): string[] {
+  const errors: string[] = [];
+  if (counts.applicable + counts.notApplicable !== counts.checks) errors.push("applicable + notApplicable ≠ checks");
+  if (counts.evaluated + counts.notEvaluable !== counts.applicable) errors.push("evaluated + notEvaluable ≠ applicable");
+  if (counts.passed + counts.failed !== counts.evaluated) errors.push("passed + failed ≠ evaluated");
+  if (counts.transactions * counts.clauses !== counts.checks) errors.push(`transactions × clauses = ${counts.transactions * counts.clauses} ≠ checks ${counts.checks}`);
+  return errors;
 }
 
 /** outputHash = SHA-256 over the sorted tuples (rowId, ruleId, clauseId, outcome, evidenceHash). */

@@ -30,9 +30,10 @@ export const POST = withApiRoute(async ({ req, actor }) => {
   const body = (await req.json()) as BulkBody;
   const bulkEnabled = await db.featureFlag.findUnique({ where: { key: "bulk.enabled" } });
   if (bulkEnabled?.value === "false") throw new MzError("MZ-MODE-503", "Bulk decisions are off by flag bulk.enabled.");
-
+  const idempotencyKey = req.headers.get("idempotency-key");
   if (body.undoOf) {
-    return json(await undo(actor.id, body.undoOf));
+    const undoResult = await withIdempotency(idempotencyKey, "bulk-undo", body, async () => undo(actor.id, body.undoOf!), actor.id);
+    return json(undoResult.result);
   }
   if (!roleCan(actor.role as never, body.command)) throw new MzError("MZ-AUTH-403", `Role ${actor.role} cannot run bulk ${body.command}.`);
   if (!Array.isArray(body.keys) || body.keys.length === 0) throw new MzError("MZ-VAL-422", "No items selected.");
@@ -66,26 +67,27 @@ export const POST = withApiRoute(async ({ req, actor }) => {
     });
   }
 
-  const bulkId = randomUUID();
-  const decisionIds: string[] = [];
-  for (const item of eligible) {
-    const audit = await appendAudit({
-      actor: actor.id, type: `decision.bulk_${body.command}`, entity: "exception", entityId: item.exceptionKey,
-      payload: { bulkId, command: body.command, from: item.status, to: body.command === "dismiss" ? "DISMISSED" : "TRIAGED" },
-    });
-    const decisionId = randomUUID();
-    decisionIds.push(decisionId);
-    await db.decision.create({
-      data: {
-        id: decisionId, exceptionKey: item.exceptionKey, command: body.command, actorId: actor.id,
-        reasonCategory: body.reasonCategory, reasonText: body.reasonText,
-        countersignedBy: "not-required", idempotencyKey: `bulk-${bulkId}-${item.exceptionKey}`, auditHash: audit.hash,
-      },
-    });
-    await db.exception.update({ where: { exceptionKey: item.exceptionKey }, data: { status: body.command === "dismiss" ? "DISMISSED" : "TRIAGED", version: item.version + 1, updatedAt: new Date() } });
-  }
-  await appendAudit({ actor: actor.id, type: "bulk.completed", entity: "bulk", entityId: bulkId, payload: { count: eligible.length, excluded: excluded.length, undoWindowMs: BULK_UNDO_WINDOW_MS } });
-  return json({ ok: true, bulkId, applied: eligible.length, excluded, undoAvailableForMs: BULK_UNDO_WINDOW_MS });
+  const execution = await withIdempotency(idempotencyKey, "bulk", body, async () => {
+    const bulkId = randomUUID();
+    for (const item of eligible) {
+      const audit = await appendAudit({
+        actor: actor.id, type: `decision.bulk_${body.command}`, entity: "exception", entityId: item.exceptionKey,
+        payload: { bulkId, command: body.command, from: item.status, to: body.command === "dismiss" ? "DISMISSED" : "TRIAGED" },
+      });
+      const decisionId = randomUUID();
+      await db.decision.create({
+        data: {
+          id: decisionId, exceptionKey: item.exceptionKey, command: body.command, actorId: actor.id,
+          reasonCategory: body.reasonCategory, reasonText: body.reasonText,
+          countersignedBy: "not-required", idempotencyKey: `bulk-${bulkId}-${item.exceptionKey}`, auditHash: audit.hash,
+        },
+      });
+      await db.exception.update({ where: { exceptionKey: item.exceptionKey }, data: { status: body.command === "dismiss" ? "DISMISSED" : "TRIAGED", version: item.version + 1, updatedAt: new Date() } });
+    }
+    await appendAudit({ actor: actor.id, type: "bulk.completed", entity: "bulk", entityId: bulkId, payload: { count: eligible.length, excluded: excluded.length, undoWindowMs: BULK_UNDO_WINDOW_MS } });
+    return { ok: true, bulkId, applied: eligible.length, excluded, undoAvailableForMs: BULK_UNDO_WINDOW_MS };
+  }, actor.id);
+  return json(execution.result);
 });
 
 async function undo(actorId: string, bulkId: string): Promise<Record<string, unknown>> {

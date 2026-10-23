@@ -1,47 +1,58 @@
 # MIZAN build progress
 
-Format follows the master brief §43.
+Current state after the audit/refactor pass. Format follows the master brief §43.
+Only claims with a command or test in this repository are marked PASS.
 
 ## Phase P0 — Foundations — PASS
-Built: prisma schema (18 models), domain libs (canonical/money/dates/calendar/errors), contracts, i18n, client store.
-Gates: `bunx tsc --noEmit` → clean · `bun run lint` → clean.
+Prisma schema (tenants, rules/versions, runs/snapshots, exceptions, decisions,
+audit, outbox/inbox, DLQ, SLA escalations, evidence packs, pattern alerts,
+product events), domain libs, contracts, i18n, client store.
+Gates: `bun run typecheck` clean · `bun run lint` clean.
 
 ## Phase P1 — Ingestion — PASS
-Built: normalise/index.ts (sniff, RFC4180, synonyms, DQ-001..018, quarantine), seeded generator.
-Gates: seed reports DQ tags (DQ-003/006/007/008/009/011/013/017 present), quarantine empty, duplicate-ID semantics (TXN-70001#1/#2).
+Encoding/delimiter sniffing (UTF-8/BOM/UTF-16/Windows-1256), RFC 4180, header
+synonyms, per-column date/decimal inference, Arabic digits, DQ-001…018,
+quarantine, content dedup, schema fingerprint, 50 MB/1 MB/2M limits, PII guard.
+Gates: `src/lib/normalize/normalize.test.ts` (12 tests), upload tests.
 
 ## Phase P2 — Rules — PASS
-Built: pack/rules.ts — 13 compiled rules with verbatim anchors, interpretation records, ≥3 generated tests each; definition (R14), attestation (R15), scope note classified.
-Gates: coverage report 16 sentences classified, none missing.
+13 compiled rules with verbatim anchors, interpretation records and declared
+boundary tests; definition/attestation/scope classification; version history;
+portable YAML packs; rule-studio lifecycle with exact-hash gates.
+Gates: coverage 16 sentences; `tests/rule-studio.test.ts` (5 tests).
 
 ## Phase P3 — Engine and export — PASS
-Built: engine (facts, 12 families, evaluate, census, output hash), severity, routing, FS-20 exporter + validator.
-Gates: `bun run mizan verify` → census PASS · determinism PASS · worked examples 5/5 PASS; export validator ok=true on fresh run.
+12 families, four outcomes, evidence, census, output hash, severity, routing,
+EN/AR canonical explanations and fact-lock; FS-20 export validation.
+Gates: `bun run mizan verify` — census, 5/5 golden, 9/9 formats, 7/7
+metamorphic, 100% mutation recall, 0 near-miss FP, 100% oracle agreement,
+fact-lock, performance.
 
-## Phase P4 — Harness — PASS (sandbox scope)
-Built: boundary/near-miss/DQ fixtures in the generator; determinism double-run; `mizan verify` gates.
-Deviations: D-13 (verification as product CLI instead of a test framework).
+## Phase P4 — Backtesting harness — PASS
+Labelled mutation operators, format mutations F-1…F-9, metamorphic MR-1…MR-7,
+independent SQL oracle (sql.js), score command, shift report, perf command,
+real CLI `verify` and `hidden-test`.
+Gates: `tests/backtest.test.ts` (12 tests), CLI suite.
 
 ## Phase P5 — Workflow — PASS
-Built: exceptions upsert + observations, severity rubric, routing, actions, lifecycle commands, CoI guard, countersign, SLA clocks, outbox, digests note.
-Gates: browser-verified two-person dismissal; API-verified MZ-AUTH-403-COI, MZ-CONC-409, bulk preview/undo.
+Immutable per-run findings, exception upsert/observations, lifecycle commands,
+CoI checks, countersign, assignments/comments, SLA deadlines + 75/100/150%
+escalations, accepted-risk expiry, outbox/inbox/DLQ, bulk limits.
+Gates: `tests/pipeline.test.ts`, `tests/api.test.ts`.
 
-## Phase P6 — Explanations — PASS
-Built: EN/AR templates (8 parts), fact-lock, DQ wording, canonical text.
-Gates: worked-example strings byte-exact (FS-20 validator); Arabic rendering verified in browser (RTL flip).
+## Phase P6 — Security and modes — PASS (local scope)
+Mode controller M0–M5 (ai.mode=none forces M1), safe-halt clearance through M4
+with chain verification and a second administrator, flags with validation and
+effects, per-route rate limits, idempotency, If-Match, audit chain + hourly
+verify, tamper demo. OIDC/RLS/Vault remain production tasks (see DEVIATIONS).
 
-## Phase P7 — Interface — PASS
-Built: shell (mode chip, banners, actor switcher, ⌘K, J/K, ?), 7 views, SADU tokens, projector theme.
-Gates: agent-browser walkthrough of overview/queue/drawer/rules/audit/settings; empty/error/loading states present.
+## Phase P7 — Interface — PASS / partial
+Seven views, SADU tokens, RTL shell, upload, queue/drawer, rule studio with
+draft approval, portable packs, patterns P01–P10, audit room, settings including
+the in-product AI statement. Remaining translation and AT coverage is listed in
+DEVIATIONS D-16/D-17.
 
-## Phase P8 — Studio and insight — PASS
-Built: plain-English grammar + guided builder, backtest preview (would-flag, sample, overlap, Jaccard), readiness score (6 components), hotspots, trends, patterns P03/P05/P08/P10.
-Gates: browser-verified parse → backtest → submit → approve.
-
-## Phase P9 — Operations — PASS (sandbox scope)
-Built: modes M0–M5 with banners (M5 verified live), flags with reasons, tamper demo → safe halt, judge reset <5s, CLI (verify/mode/audit-verify/dlq/scan-pii).
-Boilerplate: docker-compose, Dockerfile, Helm values, k6, SBOM note.
-
-## Phase P10 — Submission — PASS
-Built: README, SUBMISSION_CHECKLIST (all lines mapped), DEVIATIONS, ADR-0001..0006, runbooks RB-01..08, RAI statement, solution note, pilot plan, demo script, QA cards, API summary.
-Gates: all red lines true in the sandbox scope (see checklist).
+## Phase P8 — Operations and submission — PARTIAL
+CLI, runbooks, ADRs, RAI statement, solution note, pilot plan and demo script
+exist. Compose/Helm/k6/two-site drills are not executed here (D-19/D-9);
+external artefacts (video, hosted link, submission bundle) remain.

@@ -27,6 +27,6 @@ export const POST = withApiRoute(async ({ req, actor }) => {
       asOf: body.asOf && /^\d{4}-\d{2}-\d{2}$/.test(body.asOf) ? body.asOf : undefined,
       actor: actor.id,
     });
-  });
-  return json(result.result, 202);
+  }, actor.id);
+  return json({ ...result.result, replayed: result.replayed }, 202);
 });

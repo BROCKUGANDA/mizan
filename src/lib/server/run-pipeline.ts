@@ -7,20 +7,21 @@
 
 import { db } from "@/lib/db";
 import { randomUUID } from "node:crypto";
-import { evaluate } from "../engine/evaluate";
+import { evaluate, assertCensus } from "../engine/evaluate";
 import { resolveSeverity } from "../engine/severity";
 import { resolveRouting } from "../engine/routing";
 import { explain, explainDq, canonicalText } from "../explain/explanations";
-import { ACTION_LIBRARY } from "../pack/config";
-import { RULE_SPECS, PACK_VERSION, ENGINE_VERSION, INTERPRETATIONS } from "../pack/rules";
+import { factLock } from "../explain/factlock";
+import { configHashes } from "../pack/config";
+import { fillAction } from "../pack/actions";
+import { RULE_SPECS, PACK_VERSION, ENGINE_VERSION } from "../pack/rules";
 import { UAE_CALENDAR, slaDeadlines } from "../domain/calendar";
-import { ROUTING_TABLE } from "../contracts";
-import type { Transaction, Employee, CheckResult, Evidence, ExceptionRecord, RunManifest, CensusCounts, Severity } from "../contracts";
+import type { Transaction, Employee, CheckResult, Evidence, ExceptionRecord, RunManifest, CensusCounts, Severity, RuleSpec } from "../contracts";
 import { sha256, sha256Json, crockfordFromHex } from "../domain/canonical";
 import { appendAudit } from "../audit/chain";
 import { getMode } from "./mode";
 import { MzError } from "../domain/errors";
-import type { LocalDate } from "../domain/dates";
+import { cmpStr, type LocalDate } from "../domain/dates";
 
 const TENANT = "default";
 
@@ -82,36 +83,6 @@ export async function loadEmployees(): Promise<Employee[]> {
   return rows.map(toEmployee);
 }
 
-// ── Placeholder filling for the corrective-action library ────────────────────
-
-function fillAction(templateId: string, slots: Record<string, string | number | boolean | null>, extras: Record<string, string> = {}): { en: string; ar: string; id: string } {
-  const t = ACTION_LIBRARY[templateId] ?? { en: `Review the exception and record the outcome (missing template ${templateId})`, ar: `راجع الاستثناء وسجل النتيجة (القالب ${templateId} غير موجود)` };
-  const map: Record<string, string> = {
-    required_grade: String(slots.requiredGrade ?? ""),
-    actor: String(slots.actor ?? ""),
-    missing_documents: String(slots.missingDocumentsEn ?? slots.missingDocuments ?? ""),
-    requester: String(slots.requesterId ?? ""),
-    team_lead: "the team lead",
-    days: String(slots.backdatedDays ?? ""),
-    txn_a: String(slots.txnA ?? ""),
-    txn_b: String(slots.txnB ?? ""),
-    person: String(slots.personId ?? ""),
-    value: `${slots.pctDisplay ?? ""}%`,
-    bound: `${slots.pctMax ?? ""}%`,
-    count: String(slots.count ?? ""),
-    employee: String(slots.employeeId ?? ""),
-    window_start: String(slots.windowStart ?? ""),
-    required_manager: String(slots.requiredManager ?? ""),
-    relationship: String(slots.relationship ?? ""),
-    missing_roles: String(slots.rolesMissing ?? ""),
-    field: String(extras.field ?? ""),
-    txn_id: String(extras.txn_id ?? ""),
-    ...extras,
-  };
-  const fill = (tpl: string): string => tpl.replace(/\{(\w+)\}/g, (_m, k: string) => map[k] ?? `{${k}}`);
-  return { en: fill(t.en), ar: fill(t.ar), id: templateId };
-}
-
 const TEAM_AR: Record<string, string> = {
   "Talent Acquisition Operations": "فريق عمليات اكتساب المواهب",
   "Compensation & Payroll Operations": "فريق عمليات التعويضات والرواتب",
@@ -121,6 +92,30 @@ const TEAM_AR: Record<string, string> = {
   "HRIS Data Stewardship": "أمنة بيانات نظام الموارد البشرية",
   "HR Compliance Triage": "فرز امتثال الموارد البشرية",
 };
+
+/**
+ * The engine must evaluate the rules the studio actually activated, not the
+ * compiled constant. The DB is the source of truth; the constant is the seed
+ * fallback for a fresh database.
+ */
+export async function loadActivePack(): Promise<RuleSpec[]> {
+  const rows = await db.rule.findMany({ where: { status: { in: ["active", "shadow"] } }, orderBy: { id: "asc" } });
+  if (!rows.length) return RULE_SPECS.filter((r) => r.status === "active" || r.status === "shadow");
+  return rows.map((r) => {
+    const spec = JSON.parse(r.specJson) as RuleSpec;
+    return { ...spec, status: r.status as RuleSpec["status"], version: r.version };
+  });
+}
+
+async function loadFlagFlags(): Promise<Record<string, string>> {
+  const rows = await db.featureFlag.findMany();
+  return Object.fromEntries(rows.map((f) => [f.key, f.value]));
+}
+
+function numberOfFlag(flags: Record<string, string>, key: string, fallback: number, min: number, max: number): number {
+  const n = Number(flags[key]);
+  return Number.isFinite(n) && n >= min && n <= max ? n : fallback;
+}
 
 // ── Start a run ──────────────────────────────────────────────────────────────
 
@@ -136,34 +131,62 @@ export async function startRun(input: StartRunInput): Promise<{ runId: string; s
   if (mode.mode === "M4") throw new MzError("MZ-MODE-503", "MIZAN is read-only. Runs are blocked until maintenance closes.");
   if (mode.mode === "M5") throw new MzError("MZ-RUN-423", "Runs are locked by safe halt: an integrity check failed.");
 
-  const runsEnabled = await db.featureFlag.findUnique({ where: { key: "runs.enabled" } });
-  if (runsEnabled && runsEnabled.value === "false") throw new MzError("MZ-RUN-423", "Runs are disabled by flag runs.enabled.");
+  const flags = await loadFlagFlags();
+  if (flags["runs.enabled"] === "false") throw new MzError("MZ-RUN-423", "Runs are disabled by flag runs.enabled.");
 
   const runId = `run-${randomUUID().slice(0, 8)}`;
   const kind = input.kind ?? "standard";
-  const [transactions, employees] = await Promise.all([loadTransactions(), loadEmployees()]);
+  const [transactions, employees, activePack] = await Promise.all([loadTransactions(), loadEmployees(), loadActivePack()]);
+  if (!transactions.length) throw new MzError("MZ-VAL-422", "No transactions are loaded. Upload a dataset before starting a run.");
 
   // as-of default: the day after the latest date in the dataset (recorded in the manifest)
   const latest = transactions.reduce((acc, t) => (t.effectiveDate && t.effectiveDate > acc ? t.effectiveDate : acc), "2025-01-01");
   const asOf = input.asOf ?? addDays(latest, 1);
 
+  const datasets = await db.dataset.findMany({ where: { kind: { in: ["transactions", "employees", "policy", "finding_format"] } }, orderBy: { kind: "asc" } });
+  const inputs = datasets.length
+    ? datasets.map((d) => ({ datasetId: d.id, kind: d.kind, sha256: d.sha256, rows: d.rows }))
+    : [{ datasetId: "unknown", kind: "transactions+employees", sha256: datasetHash(transactions, employees), rows: transactions.length }];
+
+  const configH = await configHashes();
+  const manifestPins = {
+    packHash: await packHashes(activePack),
+    calendarHash: sha256Json(UAE_CALENDAR),
+    routingHash: configH.routingHash,
+    gradeLadderHash: configH.gradeLadderHash,
+    synonymsHash: configH.synonymsHash,
+    configHash: configH.configHash,
+    flagsHash: sha256Json(Object.entries(flags).sort(([a], [b]) => cmpStr(a, b))),
+  };
+
   await db.run.create({
     data: {
-      id: runId, kind, status: "RUNNING", engineVersion: ENGINE_VERSION, packVersion: PACK_VERSION,
-      packHash: "pending", calendarHash: "pending", routingHash: "pending", gradeLadderHash: "pending",
-      synonymsHash: "pending", configHash: "pending", flagsHash: "pending", asOf,
-      inputsJson: JSON.stringify([]), countsJson: "{}", perRuleJson: "{}", outputHash: "pending",
-      stagesJson: JSON.stringify([{ stage: "ingest", at: new Date().toISOString(), detail: `${transactions.length} transactions, ${employees.length} employees` }]),
+      id: runId, kind, status: "QUEUED", engineVersion: ENGINE_VERSION, packVersion: PACK_VERSION,
+      packHash: manifestPins.packHash, calendarHash: manifestPins.calendarHash, routingHash: manifestPins.routingHash,
+      gradeLadderHash: manifestPins.gradeLadderHash, synonymsHash: manifestPins.synonymsHash,
+      configHash: manifestPins.configHash, flagsHash: manifestPins.flagsHash, asOf,
+      inputsJson: JSON.stringify(inputs), countsJson: "{}", perRuleJson: "{}", outputHash: "pending",
+      stagesJson: JSON.stringify([{ stage: "queued", at: new Date().toISOString(), detail: `${transactions.length} transactions, ${employees.length} employees` }]),
     },
   });
   await appendAudit({ actor: input.actor, type: "run.started", entity: "run", entityId: runId, payload: { kind, asOf, transactions: transactions.length } });
 
-  finalizeRun(runId, transactions, employees, asOf, kind).catch(async (err) => {
-    await db.run.update({ where: { id: runId }, data: { status: "FAILED", finishedAt: new Date(), countsJson: JSON.stringify({ error: String(err) }) } }).catch(() => undefined);
-    await appendAudit({ actor: "system:worker", type: "run.failed", entity: "run", entityId: runId, payload: { error: String(err) } }).catch(() => undefined);
-  });
+  await db.run.update({ where: { id: runId }, data: { status: "RUNNING" } });
+  // The dev runtime cancels un-awaited work when a route response ends, so the
+  // finalizer is awaited. In production this is the worker consuming the queued
+  // job; the API still acknowledges with 202 and the client polls the run.
+  let finalStatus = "RUNNING";
+  try {
+    await finalizeRun(runId, transactions, employees, asOf, kind, activePack, inputs, flags, manifestPins, input.actor);
+    finalStatus = (await db.run.findUnique({ where: { id: runId } }))?.status ?? "COMPLETED";
+  } catch (err) {
+    const message = err instanceof MzError ? `${err.code}: ${err.detail}` : err instanceof Error ? err.message : String(err);
+    await db.run.update({ where: { id: runId }, data: { status: "FAILED", finishedAt: new Date(), countsJson: JSON.stringify({ error: message }) } });
+    await appendAudit({ actor: "system:worker", type: "run.failed", entity: "run", entityId: runId, payload: { error: message } });
+    finalStatus = "FAILED";
+  }
 
-  return { runId, status: "RUNNING" };
+  return { runId, status: finalStatus };
 }
 
 function addDays(s: LocalDate, n: number): LocalDate {
@@ -174,22 +197,38 @@ function addDays(s: LocalDate, n: number): LocalDate {
 
 // ── Finalize (all guards + exception upsert) ─────────────────────────────────
 
-async function finalizeRun(runId: string, transactions: Transaction[], employees: Employee[], asOf: LocalDate, kind: string): Promise<void> {
-  const activeRules = RULE_SPECS.filter((r) => r.status === "active" || r.status === "shadow");
+async function finalizeRun(
+  runId: string,
+  transactions: Transaction[],
+  employees: Employee[],
+  asOf: LocalDate,
+  kind: string,
+  activeRules: RuleSpec[],
+  inputs: RunManifest["inputs"],
+  flags: Record<string, string>,
+  pins: { packHash: string; calendarHash: string; routingHash: string; gradeLadderHash: string; synonymsHash: string; configHash: string; flagsHash: string },
+  actor: string,
+): Promise<void> {
+  const config = { calendarVersion: UAE_CALENDAR.version, routingTableVersion: "routing-1.2.0" };
+  const result = evaluate({ transactions, employees, pack: activeRules, config, asOf, runId });
 
-  const result = evaluate({ transactions, employees, pack: activeRules, config: { calendarVersion: UAE_CALENDAR.version, routingTableVersion: "routing-1.2.0" }, asOf, runId });
+  // FS-02: the census must reconcile before anything is published.
+  const censusErrors = assertCensus(result.counts);
+  if (censusErrors.length) {
+    await setSafeHalt(`census completeness failed for run ${runId}: ${censusErrors.join("; ")}`);
+    throw new Error(`MZ-INT-500: census completeness failed: ${censusErrors.join("; ")}`);
+  }
 
-  // FS-03 determinism self-check: re-evaluate and compare output hashes
-  const second = evaluate({ transactions, employees, pack: activeRules, config: { calendarVersion: UAE_CALENDAR.version, routingTableVersion: "routing-1.2.0" }, asOf, runId });
+  // FS-03 determinism self-check: re-evaluate and compare output hashes.
+  const second = evaluate({ transactions, employees, pack: activeRules, config, asOf, runId });
   if (second.outputHash !== result.outputHash) {
     await setSafeHalt(`determinism self-check failed for run ${runId}`);
     throw new Error("MZ-INT-500: determinism self-check failed");
   }
 
-  // Baselines for the flood guard (from the pack's training backtest, stored as config data)
+  const baselineFlag = await db.featureFlag.findUnique({ where: { key: "backtest.baselines" } });
   let baselines: Record<string, number> = {};
   let neBaselines: Record<string, number> = {};
-  const baselineFlag = await db.featureFlag.findUnique({ where: { key: "backtest.baselines" } });
   if (baselineFlag) {
     const parsed = JSON.parse(baselineFlag.value) as { fail?: Record<string, number>; notEvaluable?: Record<string, number> };
     baselines = parsed.fail ?? (parsed as unknown as Record<string, number>);
@@ -198,148 +237,154 @@ async function finalizeRun(runId: string, transactions: Transaction[], employees
 
   const holds: { ruleId?: string; reason: string; kind: string }[] = [];
   let status = "COMPLETED";
+  let dqStatus = false;
+  const isBacktest = kind === "backtest";
+  const isShadow = kind === "shadow";
+  const routingDisabled = flags["routing.enabled"] === "false";
+  const floodMultiplier = numberOfFlag(flags, "flood_guard.multiplier", 3, 2, 5);
+  const floodMinPp = numberOfFlag(flags, "flood_guard.min_pp", 2, 1, 5) / 100;
+  const heldRuleIds = new Set<string>();
 
-  // FS-05 flood guard per rule + FS-07 not-evaluable spike guard
-  // ADR-0006: the 5% NE-rate test applies when a rule has at least 50 applicable checks;
-  // smaller samples use the 3×-baseline count test, which is the statistically honest option.
   for (const [ruleId, c] of Object.entries(result.perRule)) {
-    const failRate = c.total ? c.failed / c.total : 0;
+    const applicable = c.total - c.notApplicable;
+    const failRate = applicable ? c.failed / applicable : 0;
     const base = baselines[ruleId];
-    if (kind === "standard" && base !== undefined && c.failed > 0) {
-      const threshold = Math.max(base * 3, base + 0.02);
+    const ruleHold = flags[`rule.${ruleId}.hold`] === "true";
+    if (ruleHold) {
+      heldRuleIds.add(ruleId);
+      holds.push({ ruleId, reason: "routing is held for this rule by rule.<id>.hold", kind: "rule_hold" });
+    }
+    if (!isBacktest && base !== undefined && c.failed > 0) {
+      const threshold = Math.max(base * floodMultiplier, base + floodMinPp);
       if (failRate > threshold) {
-        holds.push({ ruleId, reason: `fail rate ${(failRate * 100).toFixed(1)}% exceeds max(3× baseline, baseline + 2pp) = ${(threshold * 100).toFixed(1)}%`, kind: "flood_guard" });
+        heldRuleIds.add(ruleId);
+        holds.push({ ruleId, reason: `fail rate ${(failRate * 100).toFixed(1)}% exceeds max(${floodMultiplier}× baseline, baseline + ${(floodMinPp * 100).toFixed(0)}pp) = ${(threshold * 100).toFixed(1)}%`, kind: "flood_guard" });
       }
     }
-    const applicable = c.total - c.notApplicable;
     const neRate = applicable ? c.notEvaluable / applicable : 0;
-    const neBase = neBaselines[ruleId] ?? 0;
-    const neSpike = (neRate > 0.05 && applicable >= 50) || (c.notEvaluable > 3 * neBase + 1);
-    if (kind === "standard" && neSpike && c.notEvaluable > 0) {
+    const neBase = neBaselines[ruleId];
+    // The 3× test only makes sense when a training baseline exists; without one
+    // the absolute 5% test still applies (and small samples stay calm).
+    const neSpike = (neRate > 0.05 && applicable >= 50) || (neBase !== undefined && c.notEvaluable > 3 * neBase + 1);
+    if (!isBacktest && neSpike && c.notEvaluable > 0) {
       holds.push({ ruleId, reason: `not-evaluable ${c.notEvaluable}/${applicable} (${(neRate * 100).toFixed(1)}%) exceeds the band (5% at n≥50 or 3× baseline)`, kind: "not_evaluable_spike" });
-      status = "COMPLETED_WITH_DQ";
+      dqStatus = true;
     }
   }
+
+  // FS-06 run-level routing hold: above 5% of transactions OR above 2,000 new exceptions.
+  const newCount = result.results.filter((r) => r.outcome === "FAIL").length;
+  if (!isBacktest) {
+    const pct = transactions.length ? newCount / transactions.length : 0;
+    if (pct > 0.05 || newCount > 2_000) {
+      holds.push({ reason: `${newCount} new exceptions = ${(pct * 100).toFixed(1)}% of transactions (threshold 5% or 2,000); routing held until a compliance lead releases it`, kind: "run_hold" });
+    }
+  }
+  if (routingDisabled) holds.push({ reason: "routing.enabled=false: findings are recorded, nothing is routed", kind: "routing_hold" });
+  if (holds.some((h) => h.kind !== "not_evaluable_spike")) status = "COMPLETED_WITH_HOLDS";
+  if (dqStatus && status === "COMPLETED") status = "COMPLETED_WITH_DQ";
 
   await db.run.update({ where: { id: runId }, data: { status: "FINALIZING" } });
+  await db.runFinding.deleteMany({ where: { runId } });
 
-  // Exception upsert (idempotent by key; observations per run)
   const fails = result.results.filter((r) => r.outcome === "FAIL");
-  const newFailKeys = new Set<string>();
+  const snapshots: { snap: FindingSnapshot; rowId: string; evidenceHash: string }[] = [];
+  const dqCodesByRow = new Map<string, Set<string>>();
+  for (const t of transactions) {
+    if (!t.dq.length) continue;
+    dqCodesByRow.set(t.rowId, new Set(t.dq));
+  }
+  for (const r of result.results) {
+    if (!r.dq.length) continue;
+    const set = dqCodesByRow.get(r.rowId) ?? new Set<string>();
+    for (const dq of r.dq) set.add(dq);
+    dqCodesByRow.set(r.rowId, set);
+  }
+
   for (const r of fails) {
-    const key = exceptionKey(TENANT, r);
-    newFailKeys.add(key);
-    const existing = await db.exception.findUnique({ where: { exceptionKey: key } });
     const txn = transactions.find((t) => t.rowId === r.rowId)!;
     const rule = activeRules.find((x) => x.id === r.ruleId)!;
-    if (existing) {
-      const data: Record<string, unknown> = { lastRunId: runId, updatedAt: new Date() };
-      if (!holds.some((h) => h.ruleId === r.ruleId) && existing.heldReason) data.heldReason = null;
-      if (existing.evidenceHash !== r.evidenceHash) {
-        if (existing.status === "CLOSED" || existing.status === "DISMISSED") {
-          data.status = "REOPENED";
-          data.noLongerDetected = false;
-        }
-        data.evidenceHash = r.evidenceHash;
-        data.evidenceJson = JSON.stringify(r.evidence);
-      }
-      await db.exception.update({ where: { exceptionKey: key }, data });
-      await db.observation.create({ data: { id: randomUUID(), exceptionKey: key, runId, ruleVersion: r.ruleVersion, evidenceHash: r.evidenceHash ?? "" } });
+    if (isBacktest) {
+      const evidence = r.evidence as Evidence;
+      const slots = r.slots ?? {};
+      const sev = resolveSeverity({ rule, clauseId: r.clauseId, slots, evidence, asOf });
+      const routing = resolveRouting({ txn, rule, severity: sev.severity as Severity, clauseId: r.clauseId });
+      const parts = explain(txn, rule, evidence, slots);
+      const action = fillAction(rule.action.template, slots);
+      snapshots.push({ snap: snapshotOf(r, txn, rule, sev.severity as Severity, parts, action.en, routing.ownerTeam, evidence, runId, asOf), rowId: r.rowId, evidenceHash: r.evidenceHash ?? "" });
       continue;
     }
-    await createException(runId, r, txn, rule, asOf, holds.some((h) => h.ruleId === r.ruleId));
+    // Only the flood guard and an explicit rule hold stop routing. An NE spike
+    // changes the run status and opens stewardship, but does not silence findings.
+    const ruleHeld = heldRuleIds.has(r.ruleId);
+    const noRoute = isShadow || routingDisabled || ruleHeld || holds.some((h) => !h.ruleId && (h.kind === "run_hold" || h.kind === "routing_hold"));
+    const heldReason = isShadow
+      ? "shadow: findings are stored; nothing routes and no SLA clock runs"
+      : routingDisabled
+        ? "routing disabled by flag routing.enabled"
+        : ruleHeld
+          ? (holds.find((h) => h.ruleId === r.ruleId && (h.kind === "flood_guard" || h.kind === "rule_hold"))?.reason ?? "routing held")
+          : holds.some((h) => !h.ruleId && (h.kind === "run_hold" || h.kind === "routing_hold"))
+            ? (holds.find((h) => !h.ruleId && (h.kind === "run_hold" || h.kind === "routing_hold"))?.reason ?? "run routing hold")
+            : null;
+    const snapshot = await upsertException(runId, r, txn, rule, asOf, { noRoute: !!noRoute, heldReason, shadow: isShadow || rule.status === "shadow" });
+    snapshots.push({ snap: snapshot, rowId: r.rowId, evidenceHash: r.evidenceHash ?? "" });
   }
+  if (snapshots.length) {
+    await db.runFinding.createMany({
+      data: snapshots.map(({ snap, rowId, evidenceHash }) => ({
+        id: `${runId}|${rowId}|${snap.ruleId}|${snap.clauseId}`,
+        runId, rowId, txnId: snap.txnId, ruleId: snap.ruleId, clauseId: snap.clauseId,
+        ruleVersion: snap.ruleVersion, severity: snap.severity,
+        payloadJson: JSON.stringify(snap), evidenceHash,
+      })),
+    });
+  }
+  if (!isBacktest) {
+    await upsertDqExceptions(runId, transactions, dqCodesByRow, asOf, { noRoute: isShadow || routingDisabled, heldReason: isShadow ? "shadow: data-quality findings are stored; nothing routes" : routingDisabled ? "routing disabled by flag routing.enabled" : null, shadow: isShadow });
 
-  // DQ exceptions: one per (rowId, dq code) — routed to HRIS Data Stewardship (EC stewardship)
-  const seenDq = new Set<string>();
-  for (const t of transactions) {
-    for (const dq of t.dq) {
-      const key = sha256(`${TENANT}|${t.txnId}|DQ|${dq}`);
-      if (seenDq.has(key)) continue;
-      seenDq.add(key);
-      const existing = await db.exception.findUnique({ where: { exceptionKey: key } });
-      if (existing) {
-        await db.exception.update({ where: { exceptionKey: key }, data: { lastRunId: runId, noLongerDetected: false, updatedAt: new Date() } });
-        await db.observation.create({ data: { id: randomUUID(), exceptionKey: key, runId, ruleVersion: "1.0.0", evidenceHash: sha256(`${t.rowId}|${dq}`) } });
-        continue;
+    // noLongerDetected: open exceptions not re-detected in this run
+    const openExceptions = await db.exception.findMany({ where: { status: { in: ["NEW", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "PENDING_VERIFICATION", "REOPENED"] } } });
+    for (const ex of openExceptions) {
+      if (ex.lastRunId !== runId && ex.firstRunId !== runId) {
+        await db.exception.update({ where: { exceptionKey: ex.exceptionKey }, data: { noLongerDetected: true } });
       }
-      const parts = explainDq(t, dq);
-      const sla = slaDeadlines("LOW", asOf);
-      const action = fillAction("CA-DQ-01", {}, { field: FIELD_FOR_DQ[dq] ?? dq, txn_id: t.txnId });
-      await db.exception.create({
-        data: {
-          exceptionKey: key, displayId: `F-${crockfordFromHex(key)}`, tenantId: TENANT,
-          rowId: t.rowId, txnId: t.txnId, ruleId: "DQ", clauseId: dq, ruleVersion: "1.0.0",
-          family: "data_quality", severity: "LOW",
-          severityRationale: "Severity Low: base Low (data quality); never raised; goes to data stewardship.",
-          ownerTeam: "HRIS Data Stewardship", ownerUserId: null, watchersJson: "[]",
-          routingRationale: "Routed to HRIS Data Stewardship because this is a data-quality exception (family overlay).",
-          routingTableVersion: "routing-1.2.0",
-          actionId: action.id, actionEn: action.en, actionAr: action.ar,
-          headlineEn: parts.headlineEn, headlineAr: parts.headlineAr,
-          explanationEn: canonicalText(parts, emptyEvidence("DQ", dq, t), action.en, action.ar, "HRIS Data Stewardship", TEAM_AR["HRIS Data Stewardship"] ?? "", "LOW", "Severity Low: base Low (data quality); never raised; goes to data stewardship.", "درجة الخطورة: منخفضة", "en"),
-          explanationAr: canonicalText(parts, emptyEvidence("DQ", dq, t), action.en, action.ar, "HRIS Data Stewardship", TEAM_AR["HRIS Data Stewardship"] ?? "", "LOW", "Severity Low: base Low (data quality); never raised; goes to data stewardship.", "درجة الخطورة: منخفضة", "ar"),
-          status: "NEW", version: 1, groupKey: sha256(`${t.employeeId}|DQ|${dq}`),
-          ackDueAt: sla.ackDueAt, resolveDueAt: sla.resolveDueAt, heldReason: null,
-          noLongerDetected: false, firstRunId: runId, lastRunId: runId,
-          evidenceJson: JSON.stringify(emptyEvidence("DQ", dq, t)), evidenceHash: sha256(`${t.rowId}|${dq}`),
-        },
-      });
-      await db.outbox.create({ data: { id: randomUUID(), type: "notification.inapp", payloadJson: JSON.stringify({ exceptionKey: key, team: "HRIS Data Stewardship", severity: "LOW", headline: parts.headlineEn }) } });
     }
   }
 
-  // noLongerDetected: open exceptions not re-detected in this run
-  const openExceptions = await db.exception.findMany({ where: { status: { in: ["NEW", "TRIAGED", "ASSIGNED", "IN_PROGRESS", "PENDING_VERIFICATION", "REOPENED"] } } });
-  for (const ex of openExceptions) {
-    if (ex.lastRunId !== runId && ex.firstRunId !== runId) {
-      await db.exception.update({ where: { exceptionKey: ex.exceptionKey }, data: { noLongerDetected: true } });
-    }
+  // A successful shadow run is the gate to active (FS-19).
+  if (isShadow) {
+    const shadowRules = await db.rule.findMany({ where: { status: "shadow" } });
+    for (const r of shadowRules) await db.rule.update({ where: { id: r.id }, data: { shadowRunId: runId } });
   }
 
-  // FS-06 run-level routing hold: new exceptions above 5% of transactions or above 2,000 (data-quality family excluded)
-  if (kind === "standard") {
-    const newCount = fails.length;
-    const pct = transactions.length ? newCount / transactions.length : 0;
-    if (pct > 0.05 && newCount > 50) {
-      holds.push({ reason: `${newCount} new exceptions = ${(pct * 100).toFixed(1)}% of transactions (threshold 5%); routing held until a compliance lead releases it`, kind: "run_hold" });
-      status = "COMPLETED_WITH_HOLDS";
-    }
-  }
-  if (holds.some((h) => h.kind === "flood_guard") && status === "COMPLETED") status = "COMPLETED_WITH_HOLDS";
-
-  // Baselines from the first backtest run
-  if (kind === "backtest" && !baselineFlag) {
+  // Baselines from the first backtest run (fail rate over applicable checks).
+  if (isBacktest && !baselineFlag) {
     const b: Record<string, number> = {};
     const ne: Record<string, number> = {};
     for (const [ruleId, c] of Object.entries(result.perRule)) {
-      b[ruleId] = c.total ? c.failed / c.total : 0;
+      const applicable = c.total - c.notApplicable;
+      b[ruleId] = applicable ? c.failed / applicable : 0;
       ne[ruleId] = c.notEvaluable;
     }
     await db.featureFlag.create({ data: { key: "backtest.baselines", value: JSON.stringify({ fail: b, notEvaluable: ne }), updatedBy: "system:backtest", reason: "initial training baselines" } });
   }
 
-  // Manifest
   const counts: CensusCounts = result.counts;
-  counts.held = (await db.exception.count({ where: { lastRunId: runId, heldReason: { not: null } } }));
-  counts.dqExceptions = seenDq.size;
+  counts.held = isBacktest ? 0 : await db.exception.count({ where: { lastRunId: runId, heldReason: { not: null } } });
+  counts.dqExceptions = isBacktest ? 0 : dqCodesByRow.size;
   const manifest: Omit<RunManifest, "startedAt" | "finishedAt"> = {
     runId, kind: kind as RunManifest["kind"], status: status as RunManifest["status"],
     engineVersion: ENGINE_VERSION, packVersion: PACK_VERSION,
-    packHash: await packHashValue(), calendarHash: calHash(), routingHash: "routing-1.2.0",
-    gradeLadderHash: "grade-ladder-1.1.0", synonymsHash: "syn-1.1.0", configHash: "cfg-1.0.0", flagsHash: await flagsHash(),
-    asOf,
-    inputs: [{ datasetId: "pack-seed-42", kind: "transactions+employees", sha256: datasetHash(), rows: transactions.length }],
-    counts, outputHash: result.outputHash,
+    ...pins,
+    asOf, inputs, counts, outputHash: result.outputHash,
   };
 
   await db.run.update({
     where: { id: runId },
     data: {
       status,
-      packHash: manifest.packHash, calendarHash: manifest.calendarHash, routingHash: manifest.routingHash,
-      gradeLadderHash: manifest.gradeLadderHash, synonymsHash: manifest.synonymsHash, configHash: manifest.configHash,
-      flagsHash: manifest.flagsHash,
+      ...pins,
       inputsJson: JSON.stringify(manifest.inputs),
       countsJson: JSON.stringify(counts),
       perRuleJson: JSON.stringify(result.perRule),
@@ -347,20 +392,64 @@ async function finalizeRun(runId: string, transactions: Transaction[], employees
       holdsJson: JSON.stringify(holds),
       finishedAt: new Date(),
       stagesJson: JSON.stringify([
-        { stage: "ingest", detail: `${transactions.length} transactions` },
-        { stage: "evaluate", detail: `${counts.checks} checks` },
+        { stage: "ingest", detail: `${transactions.length} transactions, ${employees.length} employees` },
+        { stage: "evaluate", detail: `${counts.transactions} × ${counts.clauses} clauses = ${counts.checks} checks` },
         { stage: "finalize", detail: `${counts.failed} failed, ${counts.notEvaluable} not evaluable, ${holds.length} hold(s)` },
       ]),
     },
   });
-  await appendAudit({ actor: "system:finalizer", type: "run.completed", entity: "run", entityId: runId, payload: { status, outputHash: result.outputHash, counts } });
+  await appendAudit({ actor, type: "run.completed", entity: "run", entityId: runId, payload: { status, outputHash: result.outputHash, counts, holds } });
 }
 
+/** Exception identity uses the internal row ID, so duplicate transaction IDs never collide (EC-H02). */
 export function exceptionKey(tenant: string, r: CheckResult): string {
-  return sha256(`${tenant}|${r.txnId}|${r.ruleId}|${r.clauseId}`);
+  return sha256(`${tenant}|${r.rowId}|${r.ruleId}|${r.clauseId}`);
 }
 
-async function createException(runId: string, r: CheckResult, txn: Transaction, rule: (typeof RULE_SPECS)[number], asOf: LocalDate, held: boolean): Promise<void> {
+interface FindingSnapshot {
+  finding_id: string;
+  txnId: string;
+  ruleId: string;
+  ruleVersion: string;
+  clauseId: string;
+  severity: string;
+  headlineEn: string;
+  whatBrokeEn: string;
+  whyItMattersEn: string;
+  actionEn: string;
+  ownerTeam: string;
+  evidenceJson: string;
+  runDate: string;
+}
+
+function snapshotOf(r: CheckResult, txn: Transaction, rule: RuleSpec, sev: Severity, parts: { headlineEn: string; whatBrokeEn: string; whyEn: string }, actionEn: string, ownerTeam: string, evidence: Evidence, runId: string, asOf: LocalDate): FindingSnapshot {
+  const facts: Record<string, unknown> = {};
+  for (const f of evidence.facts) facts[f.name] = f.value;
+  return {
+    finding_id: `F-${crockfordFromHex(exceptionKey(TENANT, r))}`,
+    txnId: txn.txnId,
+    ruleId: rule.id,
+    ruleVersion: r.ruleVersion,
+    clauseId: r.clauseId,
+    severity: sev,
+    headlineEn: parts.headlineEn,
+    whatBrokeEn: parts.whatBrokeEn,
+    whyItMattersEn: parts.whyEn,
+    actionEn,
+    ownerTeam,
+    evidenceJson: JSON.stringify(facts),
+    runDate: asOf,
+  };
+}
+
+async function upsertException(
+  runId: string,
+  r: CheckResult,
+  txn: Transaction,
+  rule: RuleSpec,
+  asOf: LocalDate,
+  opts: { noRoute: boolean; heldReason: string | null; shadow: boolean },
+): Promise<FindingSnapshot> {
   const evidence = r.evidence as Evidence;
   const slots = r.slots ?? {};
   const sev = resolveSeverity({ rule, clauseId: r.clauseId, slots, evidence, asOf });
@@ -368,12 +457,69 @@ async function createException(runId: string, r: CheckResult, txn: Transaction, 
   const routing = resolveRouting({ txn, rule, severity, clauseId: r.clauseId });
   const parts = explain(txn, rule, evidence, slots);
   const action = fillAction(rule.action.template, slots);
-  const sla = slaDeadlines(severity, asOf);
+  const snapshot = snapshotOf(r, txn, rule, severity, parts, action.en, routing.ownerTeam, evidence, runId, asOf);
+  const sla = opts.noRoute ? { ackDueAt: null, resolveDueAt: null } : slaDeadlines(severity, asOf);
   const key = exceptionKey(TENANT, r);
   const groupActor = rule.family === "segregation_of_duties" ? String(slots.actor ?? txn.employeeId) : txn.employeeId;
   const bucket = Math.floor(new Date(`${txn.effectiveDate ?? asOf}T00:00:00Z`).getTime() / (90 * 86_400_000));
   const groupKey = sha256(`${groupActor}|${rule.id}|${bucket}`);
-  const interp = INTERPRETATIONS[rule.id];
+  const shadow = opts.shadow;
+  const routingRationale = shadow
+    ? `Shadow: would route to ${routing.ownerTeam}. ${routing.rationale}`
+    : routing.rationale;
+  const explanationEn = canonicalText(parts, evidence, action.en, action.ar, shadow ? `(would route to ${routing.ownerTeam})` : routing.ownerTeam, TEAM_AR[routing.ownerTeam] ?? routing.ownerTeam, severity, sev.rationale, sev.rationaleAr, "en");
+  const explanationAr = canonicalText(parts, evidence, action.en, action.ar, shadow ? `(سيُحال إلى ${TEAM_AR[routing.ownerTeam] ?? routing.ownerTeam})` : routing.ownerTeam, TEAM_AR[routing.ownerTeam] ?? routing.ownerTeam, severity, sev.rationale, sev.rationaleAr, "ar");
+  const lockEn = factLock(explanationEn, evidence, { requiredAction: action.en, locale: "en", canonicalLength: explanationEn.length });
+  const lockAr = factLock(explanationAr, evidence, { requiredAction: action.ar, locale: "ar", canonicalLength: explanationAr.length });
+  if (!lockEn.ok || !lockAr.ok) {
+    throw new MzError("MZ-INT-500", `Fact-lock rejected the canonical explanation for ${rule.id}/${r.clauseId}: ${lockEn.rejection ?? lockAr.rejection} (${lockEn.detail ?? lockAr.detail}; en ${explanationEn.length} chars, ar ${explanationAr.length} chars)`);
+  }
+
+  const existing = await db.exception.findUnique({ where: { exceptionKey: key } });
+  if (existing) {
+    const data: Record<string, unknown> = opts.shadow
+      ? { lastRunId: runId, noLongerDetected: false, updatedAt: new Date() }
+      : {
+          lastRunId: runId,
+          updatedAt: new Date(),
+          heldReason: opts.heldReason,
+          noLongerDetected: false,
+          ownerTeam: routing.ownerTeam,
+          routingRationale,
+          severity,
+          severityRationale: sev.rationale,
+          actionId: action.id,
+          actionEn: action.en,
+          actionAr: action.ar,
+          headlineEn: parts.headlineEn,
+          headlineAr: parts.headlineAr,
+          explanationEn,
+          explanationAr,
+          ackDueAt: sla.ackDueAt,
+          resolveDueAt: sla.resolveDueAt,
+        };
+    if (existing.evidenceHash !== r.evidenceHash) {
+      if (!opts.shadow && ["CLOSED", "DISMISSED", "ACCEPTED_RISK", "DUPLICATE"].includes(existing.status)) {
+        data.status = "REOPENED";
+      }
+      data.version = existing.version + 1;
+      data.evidenceHash = r.evidenceHash ?? "";
+      data.evidenceJson = JSON.stringify(evidence);
+      if (!opts.shadow) {
+        data.headlineEn = parts.headlineEn;
+        data.headlineAr = parts.headlineAr;
+        data.explanationEn = explanationEn;
+        data.explanationAr = explanationAr;
+      }
+    }
+    await db.exception.update({ where: { exceptionKey: key }, data });
+    const obs = await db.observation.findFirst({ where: { exceptionKey: key, runId } });
+    if (!obs) await db.observation.create({ data: { id: randomUUID(), exceptionKey: key, runId, ruleVersion: r.ruleVersion, evidenceHash: r.evidenceHash ?? "" } });
+    if (!opts.shadow && !opts.noRoute && existing.heldReason) {
+      await db.outbox.create({ data: { id: randomUUID(), type: "notification.inapp", payloadJson: JSON.stringify({ exceptionKey: key, team: routing.ownerTeam, severity, headline: parts.headlineEn }) } });
+    }
+    return snapshot;
+  }
 
   await db.exception.create({
     data: {
@@ -382,21 +528,84 @@ async function createException(runId: string, r: CheckResult, txn: Transaction, 
       family: rule.family, severity,
       severityRationale: sev.rationale,
       ownerTeam: routing.ownerTeam, ownerUserId: null, watchersJson: JSON.stringify(routing.watchers),
-      routingRationale: routing.rationale, routingTableVersion: routing.routingTableVersion,
+      routingRationale, routingTableVersion: routing.routingTableVersion,
       actionId: action.id, actionEn: action.en, actionAr: action.ar,
       headlineEn: parts.headlineEn, headlineAr: parts.headlineAr,
-      explanationEn: canonicalText(parts, evidence, action.en, action.ar, routing.ownerTeam, TEAM_AR[routing.ownerTeam] ?? routing.ownerTeam, severity, sev.rationale, sev.rationaleAr, "en"),
-      explanationAr: canonicalText(parts, evidence, action.en, action.ar, routing.ownerTeam, TEAM_AR[routing.ownerTeam] ?? routing.ownerTeam, severity, sev.rationale, sev.rationaleAr, "ar"),
+      explanationEn, explanationAr,
       status: "NEW", version: 1, groupKey,
       ackDueAt: sla.ackDueAt, resolveDueAt: sla.resolveDueAt,
-      heldReason: held ? "held by the flood guard: fail rate above band" : null,
+      heldReason: opts.heldReason,
       noLongerDetected: false, firstRunId: runId, lastRunId: runId,
       evidenceJson: JSON.stringify(evidence), evidenceHash: r.evidenceHash ?? "",
     },
   });
   await db.observation.create({ data: { id: randomUUID(), exceptionKey: key, runId, ruleVersion: r.ruleVersion, evidenceHash: r.evidenceHash ?? "" } });
-  await db.outbox.create({ data: { id: randomUUID(), type: "notification.inapp", payloadJson: JSON.stringify({ exceptionKey: key, team: routing.ownerTeam, severity, headline: parts.headlineEn }) } });
-  void interp;
+  if (!opts.noRoute) {
+    await db.outbox.create({ data: { id: randomUUID(), type: "notification.inapp", payloadJson: JSON.stringify({ exceptionKey: key, team: routing.ownerTeam, severity, headline: parts.headlineEn }) } });
+  }
+  return snapshot;
+}
+
+async function upsertDqExceptions(
+  runId: string,
+  transactions: Transaction[],
+  dqByRow: Map<string, Set<string>>,
+  asOf: LocalDate,
+  opts: { noRoute: boolean; heldReason: string | null; shadow: boolean },
+): Promise<void> {
+  for (const t of transactions) {
+    const codes = [...(dqByRow.get(t.rowId) ?? [])].sort();
+    for (const dq of codes) {
+      const key = sha256(`${TENANT}|${t.rowId}|DQ|${dq}`);
+      const existing = await db.exception.findUnique({ where: { exceptionKey: key } });
+      const parts = explainDq(t, dq);
+      const action = fillAction("CA-DQ-01", {}, { field: FIELD_FOR_DQ[dq] ?? dq, txn_id: t.txnId });
+      const evidence = emptyEvidence("DQ", dq, t);
+      const sla = opts.noRoute ? { ackDueAt: null, resolveDueAt: null } : slaDeadlines("LOW", asOf);
+      if (existing) {
+        await db.exception.update({
+          where: { exceptionKey: key },
+          data: opts.shadow
+            ? { lastRunId: runId, noLongerDetected: false, updatedAt: new Date() }
+            : {
+                lastRunId: runId, noLongerDetected: false, updatedAt: new Date(),
+                heldReason: opts.heldReason, ackDueAt: sla.ackDueAt, resolveDueAt: sla.resolveDueAt,
+                headlineEn: parts.headlineEn, headlineAr: parts.headlineAr,
+                actionEn: action.en, actionAr: action.ar,
+              },
+        });
+        const obs = await db.observation.findFirst({ where: { exceptionKey: key, runId } });
+        if (!obs) await db.observation.create({ data: { id: randomUUID(), exceptionKey: key, runId, ruleVersion: "1.0.0", evidenceHash: sha256(`${t.rowId}|${dq}`) } });
+        continue;
+      }
+      const owner = dq === "DQ-017" ? "HR Compliance Triage" : "HRIS Data Stewardship";
+      await db.exception.create({
+        data: {
+          exceptionKey: key, displayId: `F-${crockfordFromHex(key)}`, tenantId: TENANT,
+          rowId: t.rowId, txnId: t.txnId, ruleId: "DQ", clauseId: dq, ruleVersion: "1.0.0",
+          family: "data_quality", severity: "LOW",
+          severityRationale: "Severity Low: base Low (data quality); never raised; goes to data stewardship.",
+          ownerTeam: owner, ownerUserId: null, watchersJson: "[]",
+          routingRationale: dq === "DQ-017"
+            ? "Routed to HR Compliance Triage because the free text looks like an instruction; it is treated as data and tagged for security review (FS-15)."
+            : "Routed to HRIS Data Stewardship because this is a data-quality exception (family overlay).",
+          routingTableVersion: "routing-1.2.0",
+          actionId: action.id, actionEn: action.en, actionAr: action.ar,
+          headlineEn: parts.headlineEn, headlineAr: parts.headlineAr,
+          explanationEn: canonicalText(parts, evidence, action.en, action.ar, owner, TEAM_AR[owner] ?? owner, "LOW", "Severity Low: base Low (data quality); never raised; goes to data stewardship.", "درجة الخطورة: منخفضة", "en"),
+          explanationAr: canonicalText(parts, evidence, action.en, action.ar, owner, TEAM_AR[owner] ?? owner, "LOW", "Severity Low: base Low (data quality); never raised; goes to data stewardship.", "درجة الخطورة: منخفضة", "ar"),
+          status: "NEW", version: 1, groupKey: sha256(`${t.employeeId}|DQ|${dq}`),
+          ackDueAt: sla.ackDueAt, resolveDueAt: sla.resolveDueAt, heldReason: opts.heldReason,
+          noLongerDetected: false, firstRunId: runId, lastRunId: runId,
+          evidenceJson: JSON.stringify(evidence), evidenceHash: sha256(`${t.rowId}|${dq}`),
+        },
+      });
+      await db.observation.create({ data: { id: randomUUID(), exceptionKey: key, runId, ruleVersion: "1.0.0", evidenceHash: sha256(`${t.rowId}|${dq}`) } });
+      if (!opts.noRoute) {
+        await db.outbox.create({ data: { id: randomUUID(), type: "notification.inapp", payloadJson: JSON.stringify({ exceptionKey: key, team: owner, severity: "LOW", headline: parts.headlineEn }) } });
+      }
+    }
+  }
 }
 
 function emptyEvidence(ruleId: string, clauseId: string, t: Transaction): Evidence {
@@ -413,17 +622,10 @@ async function setSafeHalt(reason: string): Promise<void> {
   await setMode("M5", reason, "system:integrity");
 }
 
-// Config hash helpers (deterministic values pinned in the manifest)
-async function packHashValue(): Promise<string> {
-  return sha256Json({ pack: PACK_VERSION, rules: RULE_SPECS.map((r) => ({ id: r.id, v: r.version, sha: r.source.sha256 })) });
+async function packHashes(pack: RuleSpec[]): Promise<string> {
+  return sha256Json(pack.map((r) => ({ id: r.id, version: r.version, effective: r.effective, check: r.check, scope: r.scope, clauses: r.clauses, sourceSha: r.source.sha256 })));
 }
-function calHash(): string {
-  return sha256Json(UAE_CALENDAR);
-}
-async function flagsHash(): Promise<string> {
-  const flags = await db.featureFlag.findMany({ orderBy: { key: "asc" } });
-  return sha256Json(flags.map((f) => ({ key: f.key, value: f.value })));
-}
-function datasetHash(): string {
-  return sha256("pack-seed-42");
+
+function datasetHash(transactions: Transaction[], employees: Employee[]): string {
+  return sha256Json({ transactions: transactions.map((t) => t.source.rowHash).sort(), employees: employees.map((e) => e.employeeId).sort() });
 }

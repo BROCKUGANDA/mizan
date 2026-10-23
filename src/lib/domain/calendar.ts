@@ -57,10 +57,11 @@ export const UAE_CALENDAR: UaeCalendar = {
 const holidayIndex = new Map<string, CalendarHoliday>(UAE_CALENDAR.holidays.map((h) => [h.date, h]));
 
 function weekendDaysFor(date: LocalDate): number[] {
-  const defs = UAE_CALENDAR.weekends;
-  let chosen = defs[defs.length - 1]!;
-  for (const def of defs) {
-    if (date >= def.from) chosen = def;
+  // Definitions are effective-dated; pick the latest definition whose start is
+  // on or before the date (the array order is not chronological).
+  let chosen = UAE_CALENDAR.weekends[0]!;
+  for (const def of UAE_CALENDAR.weekends) {
+    if (date >= def.from && def.from >= chosen.from) chosen = def;
   }
   return chosen.days;
 }
@@ -105,6 +106,25 @@ export function businessDaysBetween(a: LocalDate, b: LocalDate): number {
     d = addDays(d, sign);
   }
   return sign > 0 ? count : -count;
+}
+
+/**
+ * Business days elapsed from `from` to `to`: business days in (from, to], so an
+ * approval on the next business day counts as 1, not 2 (the inclusive endpoints
+ * function above is for coverage windows, not intervals).
+ */
+export function businessDaysElapsed(from: LocalDate, to: LocalDate): number {
+  if (from === to) return 0;
+  const sign = from < to ? 1 : -1;
+  let count = 0;
+  let d = from;
+  while ((sign > 0 && d < to) || (sign < 0 && d > to)) {
+    d = addDays(d, sign);
+    if (sign > 0 && d > to) break;
+    if (sign < 0 && d < to) break;
+    if (isBusinessDay(d)) count += sign;
+  }
+  return count;
 }
 
 /** A date outside the loaded calendar years → DQ-015 (EC-F03). */

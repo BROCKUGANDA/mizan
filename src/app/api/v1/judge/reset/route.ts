@@ -18,6 +18,8 @@ export const POST = withApiRoute(async ({ req }) => {
   const t0 = Date.now();
 
   await db.$transaction(async (tx) => {
+    await tx.slaEscalation.deleteMany({});
+    await tx.runFinding.deleteMany({});
     await tx.observation.deleteMany({});
     await tx.decision.deleteMany({});
     await tx.comment.deleteMany({});
@@ -28,6 +30,7 @@ export const POST = withApiRoute(async ({ req }) => {
     await tx.idempotencyKey.deleteMany({});
     await tx.dlqItem.deleteMany({});
     await tx.patternAlert.deleteMany({});
+    await tx.ruleVersion.deleteMany({});
     await tx.ruleDraft.deleteMany({});
     await tx.ruleApproval.deleteMany({});
     await tx.evidencePack.deleteMany({});
@@ -35,8 +38,36 @@ export const POST = withApiRoute(async ({ req }) => {
     await tx.productEvent.deleteMany({});
   });
 
-  // Reset flags to defaults and baselines recomputed from the pack
-  await db.featureFlag.updateMany({ where: { key: { not: "backtest.baselines" } }, data: { updatedBy: "system:reset", reason: "judge reset" } });
+  // Restore the compiled rule pack exactly (statuses, specs, authors).
+  for (const spec of RULE_SPECS) {
+    await db.rule.update({
+      where: { id: spec.id },
+      data: {
+        status: spec.status,
+        specJson: JSON.stringify(spec),
+        version: spec.version,
+        textSha256: spec.source.sha256,
+        author: "policy-owner",
+      },
+    });
+  }
+
+  // Reset flags to their seeded values and recompute baselines.
+  const DEFAULTS: Record<string, string> = {
+    "ai.mode": "none", "ai.narrative.enabled": "true", "ai.authoring.enabled": "true",
+    "routing.enabled": "true", "notifications.email.enabled": "false", "notifications.webhook.enabled": "false",
+    "runs.enabled": "true", "patterns.enabled": "true", "uploads.enabled": "true",
+    "exports.findings.enabled": "true", "bulk.enabled": "true",
+    "flood_guard.multiplier": "3", "flood_guard.min_pp": "2",
+  };
+  for (const [key, value] of Object.entries(DEFAULTS)) {
+    await db.featureFlag.upsert({
+      where: { key },
+      create: { key, value, updatedBy: "system:reset", reason: "judge reset" },
+      update: { value, updatedBy: "system:reset", reason: "judge reset" },
+    });
+  }
+  await db.featureFlag.deleteMany({ where: { key: { startsWith: "rule." } } });
   await db.systemMode.upsert({
     where: { tenantId: "default" },
     create: { tenantId: "default", mode: "M0" },
@@ -53,7 +84,8 @@ export const POST = withApiRoute(async ({ req }) => {
   const failBase: Record<string, number> = {};
   const neBase: Record<string, number> = {};
   for (const [ruleId, c] of Object.entries(result.perRule)) {
-    failBase[ruleId] = c.total ? c.failed / c.total : 0;
+    const applicable = c.total - c.notApplicable;
+    failBase[ruleId] = applicable ? c.failed / applicable : 0;
     neBase[ruleId] = c.notEvaluable;
   }
   const baselines = { fail: failBase, notEvaluable: neBase };

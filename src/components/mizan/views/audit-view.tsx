@@ -308,7 +308,7 @@ export default function AuditView() {
               </Alert>
             ) : null}
 
-            {tamper ? (
+            {tamper && verification && !verification.ok ? (
               <div className="space-y-2 rounded-lg border bg-secondary/40 p-3" role="status">
                 <p className="text-xs">
                   Tampered <span className="font-mono font-semibold">seq {iso(String(tamper.tamperedSeq))}</span> — {tamper.note}

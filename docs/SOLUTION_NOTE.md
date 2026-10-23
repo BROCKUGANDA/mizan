@@ -9,7 +9,7 @@ cites the rule and the exact data that broke it, carries a severity with a state
 rationale, routes to the right owner with a suggested corrective action — and
 waits for a person. Missing or ambiguous data yields "not evaluable" with a
 data-quality code, never a silent pass. The same inputs produce byte-identical
-output, verified by hash on two runs and two machines.
+output, verified by hash on repeated runs and in CI.
 
 ## How it works (~250 words)
 
@@ -52,17 +52,19 @@ manifests, export validated against the worked examples before download.
 
 ## Results on the training data (~150 words)
 
-Seed-42 pack: 1,061 transactions × 13 rules = **15,915 checks in seconds**;
-6,415 applicable; 6,395 evaluated; 20 not evaluable; **52 exceptions** (6
-Critical, 34 High) + 7 data-quality exceptions to stewardship. All five worked
-examples reproduce exactly on every scored column (FS-20 validator). Determinism:
-identical output hash across the seed process, two server runs and the offline
-CLI. Measured precision is computed with a Wilson lower bound on decided
-exceptions and shown on the overview. Mutation/near-miss fixtures (boundaries one
-fils over, unknown approver, ambiguous amounts, instruction-like comments) are
-detected with zero near-miss false positives in the golden set. Audit readiness
-score: 80/100 on a fresh run (coverage 100%, evidence completeness 100%,
-governance 100%; decisions and timeliness rise as people work the queue).
+Seed-42 pack: 1,061 transactions × 15 rule clauses = **15,915 checks in 0.3 s**;
+6,415 applicable; 6,393 evaluated; 22 not evaluable; **49 findings** (5 Critical,
+32 High, 12 Medium) + **13 data-quality exceptions** to stewardship. All five
+worked examples reproduce exactly on every scored column (FS-20 validator).
+Determinism: identical output hash across the seed process, repeated server runs
+and the offline CLI (`ecefa394…`). Measured precision is a Wilson lower bound on
+49 labelled findings confirmed by the independent SQL oracle and boundary spot
+checks: **92.7% (49/49)**, shown on the overview with its provenance. The
+backtesting harness reports **100% mutation recall, 0 near-miss false positives,
+9/9 format mutations, 7/7 metamorphic relations and 100% oracle agreement**.
+Audit readiness score: 80/100 on a fresh run (coverage 100%, evidence
+completeness 100%, governance 100%; decisions and timeliness rise as people work
+the queue).
 
 ## Responsible AI and security (~200 words)
 
@@ -72,9 +74,9 @@ automatically; nothing writes to any source system; no write credentials exist.
 Conflict-of-interest, two-person rule approval, and High/Critical countersign
 are enforced in the API, not only the UI. The audit trail is append-only and
 hash-chained; verification failure enters safe halt (M5) and blocks writes.
-Row-level tenant isolation returns 404 semantics; logs are redacted; exports
-escape formula injection; uploads are size-, line- and row-limited with MIME
-sniffing. Pattern alerts are advisory only — never exported, never routed, no
+The demo is single-tenant; production row-level security is the deployment task
+recorded in DEVIATIONS. Logs are redacted; exports escape formula injection;
+uploads are size-, line- and row-limited with MIME sniffing. Pattern alerts are advisory only — never exported, never routed, no
 protected attributes. Small cells (<5) are suppressed. Synthetic data only: a
 PII scanner blocks real identifiers at upload. Secrets come from a vault; TLS
 1.2+, encryption at rest, CSP/HSTS/frame-ancestors 'none' are configured in the

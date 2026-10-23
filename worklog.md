@@ -231,3 +231,24 @@ Stage Summary:
 - See-through dropdown fixed at the component-contract level (scroll-area.tsx) — benefits notification panel AND rules list.
 - Zero hardcoded operational constants: all keys/intervals/events/identity/version live in src/lib/app-config.ts; all shell + view copy lives in the i18n catalog.
 - Notification center upgraded to production UX (skeleton, relative time, live-region badge, responsive, predictable dismissal).
+
+---
+Task ID: audit-refactor-e2e
+Agent: orchestrator (Qoder)
+Task: Audit the repository against the attached brief/spec documents, refactor the gaps, remove stubs, and verify end to end.
+
+Work Log:
+- Audited every core module against the checklist, failsafe/edge-case catalogue, backtesting spec and runtime/design documents; recorded the classification in docs/SUBMISSION_CHECKLIST.md and the honest limits in docs/DEVIATIONS.md.
+- Fixed engine/normalization defects: weekend effective-dating (2022 definition was overridden by 1900), strict amount comparator misread in the rule-studio grammar, value-bound base salary, any-quantifier unknown grades, instant vs string ordering, business-day windows, eligibility statuses/probation, reference-integrity DQ semantics, duplicate flag=both, JSON/CSV boundaries, Arabic digits in IDs/dates/documents, content-addressed duplicate row identity.
+- Pipeline: census assertion (FS-02), OR run-hold (FS-06), shadow/backtest isolation, held findings not routed/notified, row-ID exception keys, DB-backed activated pack, real manifest hashes/input datasets, per-run immutable finding snapshots, DQ findings from the engine, flag effects, mode M1 for ai.mode=none.
+- Export: real SHA-256 of bytes, per-(txn,rule,clause) golden matching, enum/ID/date/width validation, formula-injection escaping, immutable run snapshots.
+- Audit/decisions: tx-scoped audit writes, actor/route idempotency with MZ-IDEM-409, CoI on countersign, If-Match on countersign, assignments/comments, M5 clearance with chain verification + second admin, hourly verify and deadline jobs.
+- Rule studio: draft → backtest (exact spec hash) → submit → second-person approval → shadow run → active; version history; portable YAML packs; acknowledgement gate at >10%.
+- Added dataset upload (limits, PII, dedup, schema drift, immutable raw object store), /check, run SSE/coverage/diff/cancel, analytics incl. fairness, evidence packs with offline verification, notification digests, per-route rate limits.
+- Implemented patterns P01–P10 with a protected-attribute invariance test; replaced the fake precision metric with a labelled SQL-oracle sample (49/49, Wilson LB 0.927).
+- Added the real backtesting harness: labelled mutations (100% recall, 0 near-miss FP), F-1…F-9, MR-1…MR-7, independent SQL oracle, shift/perf/report; the CLI verify now executes every gate. Added hidden-test and real DLQ replay.
+- Removed the out-of-scope live-system integration stubs and the write-back seam; no source-system write path exists. Removed the unused socket example that blocked the production build.
+- Verification: 72 Vitest tests, typecheck/lint clean, `mizan verify` all 12 gates PASS, production build PASS, production standalone server health 200, browser walkthrough of overview, upload→run, queue→decision, rules, patterns, audit tamper→M5, reset and RTL.
+
+Stage Summary:
+- The prototype is now end-to-end on the training pack and hidden-file protocol, with the remaining production-only limits explicitly recorded rather than stubbed.

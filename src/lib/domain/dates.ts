@@ -11,6 +11,34 @@ export type Instant = string;   // ISO 8601 UTC with Z
 
 export const GST_OFFSET_MINUTES = 240; // Asia/Dubai, UTC+4, no DST
 
+const ARABIC_INDIC = "٠١٢٣٤٥٦٧٨٩";
+const PERSIAN_INDIC = "۰۱۲۳۴۵۶۷۸۹";
+
+/** Normalise Arabic-Indic/Persian digits and Arabic separators without importing money (keeps this module a leaf). */
+function asciiDigits(s: string): string {
+  let out = "";
+  for (const ch of s) {
+    const ai = ARABIC_INDIC.indexOf(ch);
+    if (ai >= 0) { out += String(ai); continue; }
+    const pi = PERSIAN_INDIC.indexOf(ch);
+    if (pi >= 0) { out += String(pi); continue; }
+    if (ch === "\u066B") { out += "."; continue; }
+    if (ch === "\u066C") { out += ","; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+/** Code-point comparison: localeCompare is not stable across machines (determinism red line). */
+export function cmpStr(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Compare ISO instants by epoch, never lexicographically (offsets differ). */
+export function compareInstants(a: Instant, b: Instant): number {
+  return new Date(a).getTime() - new Date(b).getTime();
+}
+
 export function isValidLocalDate(s: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
   const [y, m, d] = s.split("-").map(Number) as [number, number, number];
@@ -66,14 +94,14 @@ export function addMonths(s: LocalDate, n: number): LocalDate {
  * Parse a timestamp. Explicit offsets are honoured; offset-less timestamps are
  * Asia/Dubai (UTC+4, no daylight saving). Stored as UTC instant with a precision flag.
  */
-export function parseTimestamp(raw: string): { instant: Instant; precision: "timestamp" | "date" | "none" } | null {
-  const s = raw.trim();
+export function parseTimestamp(raw: string, order: DayMonthOrder = "day_month"): { instant: Instant; precision: "timestamp" | "date" | "none" } | null {
+  const s = asciiDigits(raw.trim());
   if (!s || s === "-" || s.toLowerCase() === "n/a" || s.toLowerCase() === "null") return null;
   // ISO with explicit offset or Z
   const iso = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/.exec(s);
   if (iso) {
     const norm = s.replace(" ", "T").replace(/([+-]\d{2})$/, "$1:00");
-    const d = new Date(norm.endsWith("Z") || /[+-]\d{2}:\d{2}$/.test(norm) ? norm : norm + "Z");
+    const d = new Date(norm);
     if (!isNaN(d.getTime())) return { instant: d.toISOString().replace(".000Z", "Z"), precision: "timestamp" };
   }
   // ISO without offset → Asia/Dubai
@@ -85,9 +113,41 @@ export function parseTimestamp(raw: string): { instant: Instant; precision: "tim
       return { instant: utc.toISOString().replace(".000Z", "Z"), precision: "timestamp" };
     }
   }
-  // Date-only
+  // Day-month (or month-day) date with optional time and offset
+  const local = /^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2,4})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*(Z|[+-]\d{2}:?\d{2})?$/.exec(s);
+  if (local) {
+    let a = parseInt(local[1]!, 10);
+    let b = parseInt(local[2]!, 10);
+    let y = parseInt(local[3]!, 10);
+    if (y < 100) y += y < 70 ? 2000 : 1900;
+    const day = order === "day_month" ? a : b;
+    const month = order === "day_month" ? b : a;
+    void a; void b;
+    if (!isValidLocalDate(toLocalDate(y, month, day))) return null;
+    if (local[4] !== undefined) {
+      const hh = parseInt(local[4]!, 10);
+      const mm = parseInt(local[5]!, 10);
+      const ss = local[6] ? parseInt(local[6]!, 10) : 0;
+      const offset = local[7];
+      const datePart = `${toLocalDate(y, month, day)}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+      if (offset) {
+        const off = offset === "Z" ? "Z" : offset.includes(":") ? offset : `${offset.slice(0, 3)}:${offset.slice(3)}`;
+        const d = new Date(`${datePart}${off}`);
+        if (!isNaN(d.getTime())) return { instant: d.toISOString().replace(".000Z", "Z"), precision: "timestamp" };
+        return null;
+      }
+      const utc = new Date(new Date(`${datePart}Z`).getTime() - GST_OFFSET_MINUTES * 60_000);
+      return { instant: utc.toISOString().replace(".000Z", "Z"), precision: "timestamp" };
+    }
+    // Date-only local value: stored at day precision (Asia/Dubai date is the date itself).
+    return { instant: `${toLocalDate(y, month, day)}T00:00:00Z`, precision: "date" };
+  }
+  // Date-only ISO
   const dateOnly = /^(\d{4}-\d{2}-\d{2})$/.exec(s);
   if (dateOnly && isValidLocalDate(s)) return { instant: `${s}T00:00:00Z`, precision: "date" };
+  // Named month date-time (e.g. "14 Mar 2026 09:00")
+  const named = parseCellDate(s.split(/[T ]\d{1,2}:\d{2}/)[0] ?? "", order);
+  if (named) return { instant: `${named}T00:00:00Z`, precision: "date" };
   return null;
 }
 
@@ -128,7 +188,7 @@ export function inferDayMonthOrder(values: string[]): InferredDateOrder {
 
 /** Parse a cell date given the column's inferred order. Returns null when unparseable (DQ-002). */
 export function parseCellDate(raw: string, order: DayMonthOrder): LocalDate | null {
-  const s = raw.trim();
+  const s = asciiDigits(raw.trim());
   if (!s) return null;
   // ISO
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return isValidLocalDate(s) ? s : null;
@@ -156,15 +216,22 @@ export function parseCellDate(raw: string, order: DayMonthOrder): LocalDate | nu
     if (!isValidLocalDate(toLocalDate(y, month, day))) return null;
     return toLocalDate(y, month, day);
   }
-  // Month names (English)
-  const named = /^(\d{1,2})\s+([A-Za-z]{3,9})\s+(\d{4})$/.exec(s) || /^([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(\d{4})$/.exec(s);
+  // Month names (English and Arabic)
+  const named = /^(\d{1,2})\s+([A-Za-z\u0600-\u06FF]{3,12})\s+(\d{4})$/.exec(s) || /^([A-Za-z\u0600-\u06FF]{3,12})\s+(\d{1,2}),?\s+(\d{4})$/.exec(s);
   if (named) {
     const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-    const mi = months.findIndex((mo) => (named[1]!.toLowerCase().startsWith(mo) || named[2]!.toLowerCase().startsWith(mo)));
-    if (mi >= 0) {
+    const AR_MONTHS: Record<string, number> = {
+      "يناير": 1, "فبراير": 2, "مارس": 3, "أبريل": 4, "ابريل": 4, "مايو": 5,
+      "يونيو": 6, "يوليو": 7, "أغسطس": 8, "اغسطس": 8, "سبتمبر": 9,
+      "أكتوبر": 10, "اكتوبر": 10, "نوفمبر": 11, "ديسمبر": 12,
+    };
+    const monthWord = (/^\d/.test(named[1]!) ? named[2]! : named[1]!).toLowerCase();
+    let monthNumber = months.findIndex((mo) => monthWord.startsWith(mo)) + 1;
+    if (monthNumber === 0) monthNumber = AR_MONTHS[monthWord] ?? 0;
+    if (monthNumber > 0) {
       const day = parseInt(/^\d/.test(named[1]!) ? named[1]! : named[2]!, 10);
       const y = parseInt(named[3]!, 10);
-      if (isValidLocalDate(toLocalDate(y, mi + 1, day))) return toLocalDate(y, mi + 1, day);
+      if (isValidLocalDate(toLocalDate(y, monthNumber, day))) return toLocalDate(y, monthNumber, day);
     }
   }
   return null;

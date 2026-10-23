@@ -9,7 +9,7 @@ import { MzError, toMzError, generateCorrelationId } from "../domain/errors";
 import { resolveActor, type ActorContext } from "./session";
 import { getMode } from "./mode";
 import { sha256 } from "../domain/canonical";
-import { takeToken, sweepIfNeeded, DRY_RUN_BUDGET } from "./rate-limit";
+import { takeToken, sweepIfNeeded, ROUTE_BUDGETS } from "./rate-limit";
 
 export interface Ctx<P = Record<string, string>> {
   req: NextRequest;
@@ -27,9 +27,9 @@ export function withApiRoute<P = Record<string, string>>(handler: RouteHandler<P
     try {
       const actor = await resolveActor(req.headers.get("x-mizan-actor"));
       sweepIfNeeded();
-      const isDryRun = req.method === "POST" && req.nextUrl.pathname.includes("/integrations/") && req.nextUrl.pathname.endsWith("/dry-run");
-      if (!takeToken(`${actor.id}:${isDryRun ? "dry" : "api"}`, isDryRun ? DRY_RUN_BUDGET : undefined)) {
-        throw new MzError("MZ-RATE-429", "Too many requests from this actor; retry shortly.");
+      const routeClass = classifyRoute(req.method, req.nextUrl.pathname);
+      if (!takeToken(`${actor.id}:${routeClass}`, ROUTE_BUDGETS[routeClass])) {
+        throw new MzError("MZ-RATE-429", `Rate limit for ${routeClass} requests exceeded; retry after Retry-After.`);
       }
       const params = (ctx?.params ? await ctx.params : ({} as P)) as P;
       return await handler({ req, actor, correlationId, params });
@@ -37,6 +37,16 @@ export function withApiRoute<P = Record<string, string>>(handler: RouteHandler<P
       return problemResponse(e, correlationId);
     }
   };
+}
+
+function classifyRoute(method: string, path: string): keyof typeof ROUTE_BUDGETS {
+  if (path.includes("/check")) return "check";
+  if (path.includes("/datasets") && method === "POST") return "upload";
+  if (path.endsWith("/runs") && method === "POST") return "run";
+  if (path.includes("/export") || path.includes("/evidence-pack")) return "export";
+  if (path.includes("/decisions") || path.includes("/countersign") || path.includes("/assignments") || path.includes("/comments") || path.includes("/bulk")) return "decision";
+  if (method === "GET") return "read";
+  return "config";
 }
 
 export function problemResponse(e: unknown, correlationId: string): NextResponse {
@@ -56,6 +66,7 @@ export function problemResponse(e: unknown, correlationId: string): NextResponse
 
 export async function requireMode(kind: "decision" | "run" | "upload" | "config"): Promise<string> {
   const { mode } = await getMode();
+  if (mode === "M3" && kind === "upload") throw new MzError("MZ-DEP-503", "Storage is degraded (M3): uploads and evidence packs are paused.");
   if (mode === "M4") throw new MzError("MZ-MODE-503", "MIZAN is read-only (M4). Writes are paused; drafts stay local.");
   if (mode === "M5" && (kind === "run" || kind === "upload")) throw new MzError("MZ-RUN-423", "Runs are locked by safe halt (M5). Reads and audit exports continue.");
   if (mode === "M5") throw new MzError("MZ-MODE-503", "Safe halt (M5): decisions are blocked until an administrator clears it.");

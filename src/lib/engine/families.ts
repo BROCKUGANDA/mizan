@@ -9,10 +9,11 @@ import type { Transaction, Employee, RuleSpec, Evidence, EvidenceFact, Caveat, D
 import type { EngineIndexes } from "./facts";
 import {
   activeAt, approverGrade, payChangePct, rollingAggregate, duplicateTwins, isLaterTwin,
-  submittedDate, firstApprovalInstant,
+  submittedDate, firstApprovalInstant, submittedIsDatePrecision, pointInTimeStatus,
 } from "./facts";
-import { diffDays, instantToDubaiDate, type LocalDate } from "../domain/dates";
-import { UAE_CALENDAR, dateOutsideCalendar } from "../domain/calendar";
+import { diffDays, instantToDubaiDate, compareInstants, type LocalDate } from "../domain/dates";
+import { UAE_CALENDAR, dateOutsideCalendar, businessDaysElapsed, isHoliday } from "../domain/calendar";
+import { addDays } from "../domain/dates";
 import { gradeOrdinal } from "../normalize";
 
 export interface FamilyEval {
@@ -91,10 +92,27 @@ function gradeListDisplay(grades: (number | null)[]): string {
 
 // ── Families ─────────────────────────────────────────────────────────────────
 
+function amountScope(condition: RuleSpec["scope"]["where"]): { op: "gt" | "gte"; value: number } | null {
+  if (!condition) return null;
+  if ("all" in condition) {
+    for (const sub of condition.all) {
+      const found = amountScope(sub);
+      if (found) return found;
+    }
+    return null;
+  }
+  if ("fact" in condition && condition.fact === "txn.amount_fils" && (condition.op === "gt" || condition.op === "gte") && typeof condition.value === "number") {
+    return { op: condition.op, value: condition.value };
+  }
+  return null;
+}
+
 function approvalLimit(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, indexes: EngineIndexes): FamilyEval {
   const minGrade = p.minApproverGrade as number;
   const quantifier = (p.quantifier as string) ?? "any";
-  const thresholdFils = (rule.scope.where as { all: { value: number }[] } | undefined)?.all?.[0]?.value ?? null;
+  const allowDelegates = p.allowDelegates === true;
+  const scope = amountScope(rule.scope.where);
+  const thresholdFils = scope?.value ?? null;
   const req: FamilyEval["requirement"] = {
     en: `An approver at grade ${minGrade} or above is required.`,
     ar: `يلزم معتمِم من الدرجة ${minGrade} أو أعلى.`,
@@ -108,53 +126,75 @@ function approvalLimit(txn: Transaction, rule: RuleSpec, p: Record<string, unkno
   if (txn.amountFils === null) {
     return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [] }), requirement: req };
   }
-  const apps = humanApprovers(txn);
-  if (apps.length === 0 && txn.approvals !== null) {
-    // No approvals recorded: approval rules fail (EC-B13)
+  if (txn.approvals === null) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The approvals column is missing; authority cannot be checked.", ar: "عمود الموافقات غير موجود؛ لا يمكن التحقق من الصلاحية." }, facts: [] }] }), requirement: req };
+  }
+  // Exited approvers do not count toward authority (§9 approval_limit).
+  const counted = humanApprovers(txn).filter((a) => {
+    if (a.delegateFor && !allowDelegates) return false;
+    const master = indexes.employeeById.get(a.approverId ?? "");
+    if (!master) return true; // grade may come from the transaction; DQ-005 is reported below
+    const at = a.approvedAt ? instantToDubaiDate(a.approvedAt) : txn.effectiveDate;
+    if (!at) return true;
+    return activeAt(master, at);
+  });
+  const excluded = humanApprovers(txn).length - counted.length;
+  if (counted.length === 0) {
+    // Empty approvals column = no approvals (FAIL, EC-B13); a non-empty column whose
+    // only approvers were exited also leaves nobody with authority.
     return fail(
-      [fact("amount_fils", txn.amountFils, `AED ${(txn.amountFils / 100).toLocaleString("en-US")}`, `${(txn.amountFils / 100).toLocaleString("en-US")} درهم`, "transaction", "txn.amount_fils", true),
-       fact("approver_count", 0, "no approvals recorded", "لا توجد موافقات مسجلة", "transaction", "txn.approvals", true),
+      [fact("amount_fils", txn.amountFils, `AED ${formatAmount(txn.amountFils)}`, `${formatAmount(txn.amountFils)} درهم`, "transaction", "txn.amount_fils", true),
+       fact("approver_count", 0, excluded ? `no counted approvers (${excluded} exited/delegate excluded)` : "no approvals recorded", excluded ? "لا يوجد معتمِمون محتسبون" : "لا توجد موافقات مسجلة", "transaction", "txn.approvals", true),
        fact("required_grade", minGrade, `grade ${minGrade}`, `الدرجة ${minGrade}`, "config", "rule.required_grade")],
       req,
-      { left: "approver grades", op: "≥", right: String(minGrade), result: "no approvals" },
+      { left: "approver grades", op: "≥", right: String(minGrade), result: "no counted approvals" },
       { amountFils: txn.amountFils, thresholdFils, requiredGrade: minGrade, approverId: null, approverGrade: null, approverCount: 0 }
     );
   }
-  const gradesWithSource = apps.map((a) => ({ a, g: approverGrade(txn, a, indexes) }));
+  const gradesWithSource = counted.map((a) => ({ a, g: approverGrade(txn, a, indexes) }));
   const caveats = gradesWithSource.map((x) => x.g.caveat).filter(Boolean) as Caveat[];
   const dq: DqCode[] = gradesWithSource.map((x) => x.g.dq).filter((x): x is DqCode => x !== null);
+  const unknownGrades = gradesWithSource.filter((x) => x.g.ordinal === null);
   const knownGrades = gradesWithSource.filter((x) => x.g.ordinal !== null);
   const facts: EvidenceFact[] = [
-    fact("amount_fils", txn.amountFils, `AED ${(txn.amountFils! / 100).toLocaleString("en-US")}`, `${(txn.amountFils! / 100).toLocaleString("en-US")} درهم`, "transaction", "txn.amount_fils", txn.amountFils! > (thresholdFils ?? 0)),
-    fact("threshold_fils", thresholdFils, `AED ${((thresholdFils ?? 0) / 100).toLocaleString("en-US")}`, `${((thresholdFils ?? 0) / 100).toLocaleString("en-US")} درهم`, "config", "rule.threshold"),
+    fact("amount_fils", txn.amountFils, `AED ${formatAmount(txn.amountFils)}`, `${formatAmount(txn.amountFils)} درهم`, "transaction", "txn.amount_fils", txn.amountFils > (thresholdFils ?? 0)),
+    fact("threshold_fils", thresholdFils, `AED ${formatAmount(thresholdFils ?? 0)}`, `${formatAmount(thresholdFils ?? 0)} درهم`, "config", "rule.threshold"),
     fact("required_grade", minGrade, `grade ${minGrade}`, `الدرجة ${minGrade}`, "config", "rule.required_grade"),
   ];
   for (const x of gradesWithSource) {
     facts.push(fact("approver_grade", x.g.ordinal, `${x.a.approverId} is ${x.g.ordinal === null ? "of unknown grade" : `grade ${x.g.ordinal}`} (from ${x.g.source === "transaction" ? "transaction" : "master"})`, `${x.a.approverId} ${x.g.ordinal === null ? "بدرجة غير معروفة" : `من الدرجة ${x.g.ordinal}`} (من ${x.g.source === "transaction" ? "المعاملة" : "البيانات الرئيسية"})`, x.g.source === "transaction" ? "transaction" : "employee_master", `txn.approvals.${x.a.approverId}`, x.g.ordinal !== null && x.g.ordinal < minGrade));
   }
-  if (dq.includes("DQ-005") || dq.includes("DQ-011")) {
-    return { ...notEvaluable(rule, "C1", facts, { dq, caveats }), requirement: req };
+  const slots: FamilyEval["slots"] = {
+    amountFils: txn.amountFils, thresholdFils, requiredGrade: minGrade,
+    approverId: knownGrades[0]?.a.approverId ?? counted[0]?.approverId ?? null,
+    approverGrade: knownGrades[0]?.g.ordinal ?? null,
+    approverCount: counted.length,
+  };
+  if (quantifier === "all") {
+    if (unknownGrades.length > 0) return { ...notEvaluable(rule, "C1", facts, { dq: dq.length ? dq : ["DQ-001"], caveats }), requirement: req };
+    const allMeet = knownGrades.every((x) => x.g.ordinal! >= minGrade);
+    return (allMeet ? pass : fail)(facts, req, { left: gradeListDisplay(knownGrades.map((x) => x.g.ordinal)), op: "≥", right: String(minGrade), result: allMeet ? "all approvers meet the grade" : "an approver is below the grade" }, slots, dq, caveats);
   }
-  if (quantifier === "any") {
-    if (knownGrades.length === 0) return { ...notEvaluable(rule, "C1", facts, { dq: ["DQ-001"], caveats }), requirement: req };
-    const meets = knownGrades.some((x) => x.g.ordinal! >= minGrade);
-    const slots: FamilyEval["slots"] = {
-      amountFils: txn.amountFils, thresholdFils, requiredGrade: minGrade,
-      approverId: knownGrades[0]!.a.approverId, approverGrade: knownGrades[0]!.g.ordinal, approverCount: apps.length,
-    };
-    if (meets) {
-      return pass(facts, req, { left: "approver grades", op: "≥", right: String(minGrade), result: "an approver meets the grade" }, slots, dq, caveats);
-    }
-    const breaching = knownGrades.filter((x) => x.g.ordinal! < minGrade);
-    slots.approverId = breaching[0]?.a.approverId ?? slots.approverId;
-    slots.approverGrade = breaching[0]?.g.ordinal ?? slots.approverGrade;
-    return fail(facts, req, { left: gradeListDisplay(knownGrades.map((x) => x.g.ordinal)), op: "≥", right: String(minGrade), result: "no approver meets the grade" }, slots, dq, caveats);
+  const meeting = knownGrades.find((x) => x.g.ordinal! >= minGrade);
+  if (meeting) {
+    slots.approverId = meeting.a.approverId;
+    slots.approverGrade = meeting.g.ordinal;
+    return pass(facts, req, { left: "approver grades", op: "≥", right: String(minGrade), result: "an approver meets the grade" }, slots, dq, caveats);
   }
-  // quantifier "all"
-  if (knownGrades.length < apps.length) return { ...notEvaluable(rule, "C1", facts, { dq: ["DQ-001"], caveats }), requirement: req };
-  const allMeet = knownGrades.every((x) => x.g.ordinal! >= minGrade);
-  const slots2: FamilyEval["slots"] = { amountFils: txn.amountFils, thresholdFils, requiredGrade: minGrade, approverId: apps[0]?.approverId ?? null, approverGrade: knownGrades[0]?.g.ordinal ?? null, approverCount: apps.length };
-  return (allMeet ? pass : fail)(facts, req, { left: gradeListDisplay(knownGrades.map((x) => x.g.ordinal)), op: "≥", right: String(minGrade), result: allMeet ? "all approvers meet the grade" : "an approver is below the grade" }, slots2, dq, caveats);
+  if (unknownGrades.length > 0) {
+    // An unknown grade could still meet the requirement: never guess a FAIL.
+    return { ...notEvaluable(rule, "C1", facts, { dq: dq.length ? dq : ["DQ-001"], caveats }), requirement: req };
+  }
+  const breaching = knownGrades.filter((x) => x.g.ordinal! < minGrade);
+  slots.approverId = breaching[0]?.a.approverId ?? slots.approverId;
+  slots.approverGrade = breaching[0]?.g.ordinal ?? slots.approverGrade;
+  return fail(facts, req, { left: gradeListDisplay(knownGrades.map((x) => x.g.ordinal)), op: "≥", right: String(minGrade), result: "no approver meets the grade" }, slots, dq, caveats);
+}
+
+function formatAmount(fils: number): string {
+  const abs = Math.abs(fils);
+  const whole = String(Math.floor(abs / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return `${fils < 0 ? "-" : ""}${whole}.${String(abs % 100).padStart(2, "0")}`;
 }
 
 function approvalCount(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, indexes: EngineIndexes): FamilyEval {
@@ -162,24 +202,39 @@ function approvalCount(txn: Transaction, rule: RuleSpec, p: Record<string, unkno
   const requiredRoles = p.requiredRoles as string[];
   const req: FamilyEval["requirement"] = {
     en: `At least ${minDistinct} distinct approvers covering ${requiredRoles.join(" and ")} are required.`,
-    ar: `يلزم ${minDistinct} معتمِمين مختلفين على الأقيق يغطون ${requiredRoles.join(" و ")}.`,
+    ar: `يلزم ${minDistinct} معتمِمين مختلفين على الأقل يغطون ${requiredRoles.join(" و ")}.`,
     machine: `${rule.id}:distinct>=${minDistinct};roles=${requiredRoles.join("+")}`,
   };
+  if (txn.approvals === null) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The approvals column is missing; roles cannot be checked.", ar: "عمود الموافقات غير موجود؛ لا يمكن التحقق من الأدوار." }, facts: [] }] }), requirement: req };
+  }
   const apps = humanApprovers(txn);
   const rolesFound = new Set<string>();
+  let unresolvedRole = false;
   const emp = indexes.employeeById.get(txn.employeeId);
   for (const a of apps) {
-    if (a.role === "HRBP" || indexes.employeeById.get(a.approverId ?? "")?.roles.includes("HRBP")) rolesFound.add("HRBP");
-    if (a.role === "LINE_MANAGER" || (emp?.managerId && a.approverId === emp.managerId)) rolesFound.add("LINE_MANAGER");
+    const master = indexes.employeeById.get(a.approverId ?? "");
+    const role = (a.role ?? "").toUpperCase();
+    if (role === "HRBP" || master?.roles.includes("HRBP")) rolesFound.add("HRBP");
+    if (role === "LINE_MANAGER" || (emp?.managerId && a.approverId === emp.managerId)) rolesFound.add("LINE_MANAGER");
+    const knownRole = role === "HRBP" || role === "LINE_MANAGER" || role === "RECEIVING_MANAGER" || role === "";
+    const masterKnown = master?.roles.includes("HRBP") || (emp?.managerId !== undefined && emp?.managerId === a.approverId);
+    if (!knownRole && !masterKnown) unresolvedRole = true;
+    if (!master && !knownRole) unresolvedRole = true;
   }
   const distinct = new Set(apps.map((a) => a.approverId));
+  const missingRoles = requiredRoles.filter((r) => !rolesFound.has(r));
+  const lineManagerUnknown = requiredRoles.includes("LINE_MANAGER") && !!emp && !emp.managerId;
   const facts: EvidenceFact[] = [
     fact("approver_count", distinct.size, `${distinct.size} distinct approver(s)`, `${distinct.size} معتمِم مختلف`, "transaction", "txn.approvals", distinct.size < minDistinct),
     ...requiredRoles.map((r) => fact(`role_${r}`, rolesFound.has(r), `${r} ${rolesFound.has(r) ? "present" : "missing"}`, `${r === "HRBP" ? "شريك الموارد البشرية" : "المدير المباشر"} ${rolesFound.has(r) ? "موجود" : "غير موجود"}`, "derived", `roles.${r}`, !rolesFound.has(r))),
   ];
-  const missingRoles = requiredRoles.filter((r) => !rolesFound.has(r));
   const slots: FamilyEval["slots"] = { approverCount: distinct.size, rolesFound: [...rolesFound].join(", "), rolesMissing: missingRoles.join(", "), minDistinct, requiredRoles: requiredRoles.join(", ") };
   if (missingRoles.length === 0 && distinct.size >= minDistinct) return pass(facts, req, { left: `${distinct.size} distinct, roles ${[...rolesFound].join("+")}`, op: "≥", right: `${minDistinct} + ${requiredRoles.join("+")}`, result: "met" }, slots);
+  if (unresolvedRole || lineManagerUnknown) {
+    // Role information cannot be resolved, so a missing role is unknown, never a breach.
+    return { ...notEvaluable(rule, "C1", facts, { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "An approver's role cannot be resolved from the transaction or the employee master.", ar: "تعذر تحديد دور أحد المعتمِمین من المعاملة أو البيانات الرئيسية." }, facts: [] }] }), requirement: req };
+  }
   return fail(facts, req, { left: `${distinct.size} distinct, roles ${[...rolesFound].join("+")}`, op: "≥", right: `${minDistinct} + ${requiredRoles.join("+")}`, result: missingRoles.length ? `missing ${missingRoles.join(", ")}` : "not enough distinct approvers" }, slots);
 }
 
@@ -193,14 +248,23 @@ function approvalChain(txn: Transaction, rule: RuleSpec, clauseId: string, p: Re
     ar: "يلزم اعتماد المدير المرسل (المدير المباشر) ومدير الإدارة المستلمة لنقل المعاملة.",
     machine: `${rule.id}:must_include=${mustInclude.join("+")}`,
   };
-  if (emp && indexes.cycleEmployees.has(emp.employeeId)) {
-    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-010"], caveats: [{ code: "DQ-010", message: { en: "The management chain has a cycle for this employee.", ar: "سلسلة الإدارة تحتوي على حلقة لهذا الموظف." }, facts: [emp.employeeId] }] }), requirement: req };
+  if (!emp) {
+    return { ...notEvaluable(rule, clauseId, [], { dq: ["DQ-004"], caveats: [{ code: "DQ-004", message: { en: `Employee ${txn.employeeId} is not in the employee master, so the chain is unknown.`, ar: `الموظف ${txn.employeeId} غير موجود في بيانات الموظفين، لذا سلسلة الإدارة غير معروفة.` }, facts: [txn.employeeId] }] }), requirement: req };
   }
-  const lineMgr = emp?.managerId ?? null;
+  if (indexes.cycleEmployees.has(emp.employeeId)) {
+    return { ...notEvaluable(rule, clauseId, [], { dq: ["DQ-010"], caveats: [{ code: "DQ-010", message: { en: "The management chain has a cycle for this employee.", ar: "سلسلة الإدارة تحتوي على حلقة لهذا الموظف." }, facts: [emp.employeeId] }] }), requirement: req };
+  }
+  const lineMgr = emp.managerId ?? null;
   const recMgr = (txn.passthrough.receiving_manager_id ?? null) || null;
   const linePresent = lineMgr ? approverIds.has(lineMgr) : false;
   const recPresent = recMgr ? approverIds.has(recMgr) : false;
   const clause = clauseId === "C2" ? "C2" : "C1";
+  if (clause === "C1" && !lineMgr) {
+    return { ...notEvaluable(rule, clause, [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "No line manager is recorded for this employee, so the sending-manager approval cannot be checked.", ar: "لا يوجد مدير مباشر مسجل لهذا الموظف، لذا لا يمكن التحقق من موافقة المدير المرسل." }, facts: [emp.employeeId] }] }), requirement: req };
+  }
+  if (clause === "C2" && !recMgr) {
+    return { ...notEvaluable(rule, clause, [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The receiving manager is not recorded, so the receiving approval cannot be checked.", ar: "المدير المستلم غير مسجل، لذا لا يمكن التحقق من موافقته." }, facts: [txn.txnId] }] }), requirement: req };
+  }
   const facts: EvidenceFact[] = [
     fact("line_manager", lineMgr, lineMgr ? `line manager ${lineMgr} ${linePresent ? "approved" : "did not approve"}` : "no line manager recorded", lineMgr ? `المدير المباشر ${lineMgr} ${linePresent ? "اعتمد" : "لم يعتمد"}` : "لا يوجد مدير مباشر مسجل", "employee_master", "employee.manager_id", clause === "C1" && !linePresent),
     fact("receiving_manager", recMgr, recMgr ? `receiving manager ${recMgr} ${recPresent ? "approved" : "did not approve"}` : "receiving manager not recorded", recMgr ? `المدير المستلم ${recMgr} ${recPresent ? "اعتمد" : "لم يعتمد"}` : "المدير المستلم غير مسجل", "transaction", "txn.receiving_manager_id", clause === "C2" && !recPresent),
@@ -224,15 +288,18 @@ function segregationOfDuties(txn: Transaction, rule: RuleSpec, clauseId: string,
     ar: "لا يمكن للطالب اعتماد المعاملة، ولا يجوز لأحد اعتماد معاملة يستفيد منها.",
     machine: `${rule.id}:requester≠approver;approver≠beneficiary`,
   };
+  if (txn.approvals === null) {
+    return { ...notEvaluable(rule, clauseId, [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The approvals column is missing; segregation of duties cannot be checked.", ar: "عمود الموافقات غير موجود؛ لا يمكن التحقق من الفصل بين المهام." }, facts: [] }] }), requirement: req };
+  }
   const apps = humanApprovers(txn);
   const requester = txn.requesterId;
   const beneficiary = txn.employeeId;
-  if (requester === null) {
-    return { ...notEvaluable(rule, clauseId, [], { dq: ["DQ-001"], caveats: [] }), requirement: req };
-  }
   const clause = clauseId === "C2" ? "C2" : "C1";
+  if (clause === "C1" && requester === null) {
+    return { ...notEvaluable(rule, clauseId, [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The requester is missing, so the requester–approver check cannot run.", ar: "الطالب غير موجود، لذا لا يمكن تنفيذ فحص الطالب والمعتمِِم." }, facts: [] }] }), requirement: req };
+  }
   if (clause === "C1") {
-    const offender = apps.find((a) => a.approverId === requester) ?? null;
+    const offender = apps.find((a) => a.approverId === requester || a.delegateFor === requester) ?? null;
     const facts: EvidenceFact[] = [
       fact("requester_id", requester, `requester ${requester}`, `الطالب ${requester}`, "transaction", "txn.requester_id", !!offender),
       ...apps.map((a) => fact("approver_id", a.approverId, `approver ${a.approverId}`, `المعتمِم ${a.approverId}`, "transaction", "txn.approvals", a.approverId === requester)),
@@ -241,7 +308,7 @@ function segregationOfDuties(txn: Transaction, rule: RuleSpec, clauseId: string,
     if (!offender) return pass(facts, req, { left: "requester", op: "≠", right: "approvers", result: "independent" }, slots);
     return fail(facts, req, { left: `requester ${requester}`, op: "≠", right: `approver ${offender.approverId}`, result: "the same person" }, slots);
   }
-  const offender = apps.find((a) => a.approverId === beneficiary) ?? null;
+  const offender = apps.find((a) => a.approverId === beneficiary || a.delegateFor === beneficiary) ?? null;
   const facts: EvidenceFact[] = [
     fact("employee_id", beneficiary, `beneficiary ${beneficiary}`, `المستفيد ${beneficiary}`, "transaction", "txn.employee_id", !!offender),
     ...apps.map((a) => fact("approver_id", a.approverId, `approver ${a.approverId}`, `المعتمِم ${a.approverId}`, "transaction", "txn.approvals", a.approverId === beneficiary)),
@@ -269,13 +336,21 @@ function requiredDocuments(txn: Transaction, rule: RuleSpec, p: Record<string, u
   let conditionMissing = false;
   for (const r of required) if (!attached.has(r)) missing.push(r);
   for (const c of conditionals) {
-    if (c.when.fact === "employee.nationality") {
-      if (!nationality) { conditionMissing = true; continue; }
-      if (c.when.op === "ne" && nationality !== c.when.value && !attached.has(c.document)) missing.push(c.document);
-    }
+    let factValue: string | null = null;
+    if (c.when.fact === "employee.nationality") factValue = nationality;
+    else if (c.when.fact === "txn.type") factValue = txn.type;
+    else if (c.when.fact === "txn.department") factValue = txn.department;
+    if (factValue === null) { conditionMissing = true; continue; }
+    const matches =
+      c.when.op === "eq" ? factValue === c.when.value :
+      c.when.op === "ne" ? factValue !== c.when.value :
+      c.when.op === "in" ? (c.when.value as unknown as string[]).includes(factValue) :
+      c.when.op === "nin" ? !(c.when.value as unknown as string[]).includes(factValue) :
+      false;
+    if (matches && !attached.has(c.document)) missing.push(c.document);
   }
   if (conditionMissing) {
-    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "Nationality is missing, so the conditional visa requirement cannot be decided.", ar: "الجنسية غير موجودة، لذا لا يمكن تحديد شرط التأشيرة." }, facts: [] }] }), requirement: req };
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "A condition field needed for the document requirement is missing; the check cannot be decided.", ar: "حقل شرط مطلوب لمتطلب المستند غير موجود؛ لا يمكن تحديد النتيجة." }, facts: [] }] }), requirement: req };
   }
   const facts: EvidenceFact[] = [
     ...[...attached].map((d) => fact("attached", d, `attached: ${d}`, `مرفق: ${DOC_AR[d] ?? d}`, "transaction", "txn.documents")),
@@ -297,33 +372,62 @@ const DOC_AR: Record<string, string> = {
 };
 
 function timingWindow(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, _indexes: EngineIndexes): FamilyEval {
-  const maxDays = p.maxDays as number;
+  const maxDays = typeof p.maxDays === "number" ? p.maxDays : null;
+  const minDays = typeof p.minDays === "number" ? p.minDays : null;
+  const basis = (p.basis as string) === "business" ? "business" : "calendar";
   const req: FamilyEval["requirement"] = {
-    en: `Backdating must not exceed ${maxDays} days.`,
-    ar: `يجب ألا يتجاوز التأريخ المسبق ${maxDays} يوماً.`,
-    machine: `${rule.id}:backdated<=${maxDays}`,
+    en: maxDays !== null ? `Backdating must not exceed ${maxDays} ${basis === "business" ? "business " : ""}days.` : `The interval must be at least ${minDays} ${basis === "business" ? "business " : ""}days.`,
+    ar: maxDays !== null ? `يجب ألا يتجاوز التأريخ المسبق ${maxDays} ${basis === "business" ? "أيام عمل " : "يوماً"}.` : `يجب ألا تقل الفترة عن ${minDays} ${basis === "business" ? "أيام عمل " : "يوماً"}.`,
+    machine: `${rule.id}:${basis}${maxDays !== null ? `<=${maxDays}` : `>=${minDays}`}`,
   };
-  const eff = txn.effectiveDate;
-  const sub = submittedDate(txn);
-  if (!eff || !sub) {
-    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [] }), requirement: req };
+  const dateFor = (name: string): LocalDate | null => {
+    if (name === "effectiveDate") return txn.effectiveDate;
+    if (name === "submittedDate") return submittedDate(txn);
+    if (name === "approvedDate") {
+      const a = firstApprovalInstant(txn).instant;
+      return a ? instantToDubaiDate(a) : null;
+    }
+    return null;
+  };
+  const fromFact = (p.fromFact as string) ?? "effectiveDate";
+  const toFact = (p.toFact as string) ?? "submittedDate";
+  const from = dateFor(fromFact);
+  const to = dateFor(toFact);
+  if (!from || !to) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "A date needed for the timing window is missing.", ar: "تاريخ مطلوب لنافذة التوقيت غير موجود." }, facts: [] }] }), requirement: req };
   }
-  const backdated = diffDays(sub, eff); // positive = effective before submission
-  const isBackdated = backdated > 0;
-  const within = backdated <= maxDays;
-  const facts: EvidenceFact[] = [
-    fact("effective_date", eff, `effective ${eff}`, `السريان ${eff}`, "transaction", "txn.effective_date", isBackdated && !within),
-    fact("submitted_date", sub, `submitted ${sub}`, `الإرسال ${sub}`, "transaction", "txn.submitted_at"),
-    fact("backdated_days", Math.max(0, backdated), `${Math.max(0, backdated)} day(s) backdated`, `${Math.max(0, backdated)} يوم تأريخ مسبق`, "derived", "submitted−effective", isBackdated && !within),
-    fact("max_days", maxDays, `${maxDays} days allowed`, `${maxDays} يوماً مسموح`, "config", "rule.max_days"),
-  ];
+  if (basis === "business" && (dateOutsideCalendar(from) || dateOutsideCalendar(to))) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-015"], caveats: [{ code: "DQ-015", message: { en: "A date is outside the loaded calendar years, so business days cannot be counted.", ar: "أحد التاريخين خارج سنوات التقويم المحمّلة، لذا لا يمكن حساب أيام العمل." }, facts: [from, to] }] }), requirement: req };
+  }
+  const elapsed = basis === "business" ? businessDaysElapsed(from, to) : diffDays(to, from); // positive = to after from
+  const isBackdated = elapsed > 0;
+  const withinMax = maxDays === null || elapsed <= maxDays;
+  const withinMin = minDays === null || elapsed >= minDays;
+  const ok = withinMax && withinMin;
+  const provisional: string[] = [];
+  if (basis === "business") {
+    let d = from;
+    while (d < to) {
+      const h = isHoliday(d);
+      if (h?.provisional) provisional.push(h.date);
+      d = addDays(d, 1);
+    }
+  }
   const caveats: Caveat[] = [];
-  if (dateOutsideCalendar(eff)) {
-    caveats.push({ code: "DQ-015", message: { en: "The effective date is outside the loaded calendar years.", ar: "تاريخ السريان خارج سنوات التقويم المحمّلة." }, facts: [eff] });
-  }
-  const slots: FamilyEval["slots"] = { effectiveDate: eff, submittedDate: sub, backdatedDays: Math.max(0, backdated), maxDays };
-  if (!isBackdated || within) return pass(facts, req, { left: `${Math.max(0, backdated)} days`, op: "≤", right: `${maxDays} days`, result: "within the window" }, slots, [], caveats);
-  return fail(facts, req, { left: `${backdated} days`, op: "≤", right: `${maxDays} days`, result: "backdating exceeds the window" }, slots, [], caveats);
+  if (provisional.length) caveats.push({ code: "PROVISIONAL_HOLIDAY", message: { en: `Provisional holidays were counted: ${provisional.join(", ")}.`, ar: `تم احتساب أعياد مؤقتة: ${provisional.join("، ")}.` }, facts: provisional });
+  const facts: EvidenceFact[] = [
+    fact(fromFact === "effectiveDate" ? "effective_date" : fromFact, from, `${fromFact} ${from}`, `${fromFact} ${from}`, "transaction", `txn.${fromFact}`, isBackdated && !ok),
+    fact(toFact === "submittedDate" ? "submitted_date" : toFact, to, `${toFact} ${to}`, `${toFact} ${to}`, "transaction", `txn.${toFact}`),
+    fact("interval_days", elapsed, `${elapsed} ${basis === "business" ? "business " : ""}day(s)`, `${elapsed} ${basis === "business" ? "أيام عمل" : "يوم"}`, "derived", `${toFact}−${fromFact}`, isBackdated && !ok),
+    ...(maxDays !== null ? [fact("max_days", maxDays, `${maxDays} days allowed`, `${maxDays} يوماً مسموح`, "config", "rule.max_days")] : []),
+    ...(minDays !== null ? [fact("min_days", minDays, `${minDays} days required`, `${minDays} يوماً مطلوب`, "config", "rule.min_days")] : []),
+  ];
+  const slots: FamilyEval["slots"] = { effectiveDate: txn.effectiveDate, submittedDate: submittedDate(txn), backdatedDays: Math.max(0, elapsed), maxDays: maxDays ?? "", intervalDays: elapsed, basis, from: fromFact, to: toFact };
+  const comparison = maxDays !== null
+    ? { left: `${elapsed} days`, op: "≤", right: `${maxDays} days`, result: ok ? "within the window" : "backdating exceeds the window" }
+    : { left: `${elapsed} days`, op: "≥", right: `${minDays} days`, result: ok ? "within the window" : "the interval is below the minimum" };
+  if (ok) return pass(facts, req, comparison, slots, [], caveats);
+  return fail(facts, req, comparison, slots, [], caveats);
 }
 
 function sequence(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, _indexes: EngineIndexes): FamilyEval {
@@ -333,26 +437,31 @@ function sequence(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, 
     ar: "يجب تسجيل الموافقة بعد إرسال المعاملة.",
     machine: `${rule.id}:approvedAt>submittedAt`,
   };
+  if (txn.approvals === null) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The approvals column is missing; the order cannot be checked.", ar: "عمود الموافقات غير موجود؛ لا يمكن التحقق من الترتيب." }, facts: [] }] }), requirement: req };
+  }
   const { instant: approvedAt, precision } = firstApprovalInstant(txn);
   if (!txn.submittedAt) {
     return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "Submission time is missing; the order cannot be checked.", ar: "وقت الإرسال غير موجود؛ لا يمكن التحقق من الترتيب." }, facts: [] }] }), requirement: req };
   }
-  if (txn.approvals !== null && txn.approvals.length > 0 && !approvedAt) {
+  if (txn.approvals.length > 0 && !approvedAt) {
     // Approver present but timestamp missing (EC-D14): authority rules still evaluate; sequence NOT_EVALUABLE
     return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "Approval timestamp is missing; the order cannot be checked.", ar: "وقت الموافقة غير موجود؛ لا يمكن التحقق من الترتيب." }, facts: [] }] }), requirement: req };
   }
   if (!approvedAt) {
     // zero approvals → nothing recorded after submission → FAIL (EC-B13)
     return fail(
-      [fact("approvals", 0, "no approvals recorded", "لا توجد موافقات مسجلة", "transaction", "txn.approvals", true)],
+      [fact("approvals", 0, "no approvals recorded", "لا توجد موافقات مسجلة", "transaction", "txn.approvals", true),
+       fact("submitted_at", txn.submittedAt, `submitted ${txn.submittedAt}`, `الإرسال ${txn.submittedAt}`, "transaction", "txn.submitted_at")],
       req, { left: "approval", op: ">", right: "submission", result: "no approval recorded" },
       { approvedAt: null, submittedAt: txn.submittedAt, zeroApprovals: true }
     );
   }
   const approvedDate = instantToDubaiDate(approvedAt);
   const submittedDubai = instantToDubaiDate(txn.submittedAt);
-  const dayPrecision = precision === "date" || txn.submittedPrecision === "date";
-  const after = approvedAt > txn.submittedAt;
+  const dayPrecision = precision === "date" || submittedIsDatePrecision(txn);
+  const ordering = compareInstants(approvedAt, txn.submittedAt);
+  const after = ordering > 0;
   const equalDay = approvedDate === submittedDubai;
   const caveats: Caveat[] = [];
   if (dayPrecision) caveats.push({ code: "DAY_PRECISION", message: { en: "Compared at day precision because a timestamp is missing.", ar: "تمت المقارنة بدقة اليوم لغياب الطابع الزمني." }, facts: [] });
@@ -366,17 +475,20 @@ function sequence(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, 
     // date-precision same-day: "not before" is satisfied at day precision — treated as pass with caveat
     return pass(facts, req, { left: "approval (date precision)", op: "≥", right: "submission (date precision)", result: "same day" }, slots, [], caveats);
   }
-  const critical = approvedAt < txn.submittedAt; // strictly before submission
+  const critical = ordering < 0; // strictly before submission
   return fail(facts, req, { left: "approval", op: ">", right: "submission", result: critical ? "approval recorded before submission" : "approval recorded at the same instant" }, { ...slots, approvalBeforeSubmission: critical }, [], caveats);
 }
 
 function eligibility(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, indexes: EngineIndexes): FamilyEval {
-  const allowedStatuses = p.allowedStatuses as string[];
+  const allowedStatuses = (p.allowedStatuses as string[]) ?? ["ACTIVE"];
+  const exemptTypes = (p.exemptTypes as string[]) ?? [];
+  const probationDays = typeof p.probationDays === "number" ? p.probationDays : null;
   const req: FamilyEval["requirement"] = {
-    en: "The employee must be active on the effective date.",
-    ar: "يجب أن يكون الموظف على رأس العمل في تاريخ السريان.",
-    machine: `${rule.id}:status@effective∈{${allowedStatuses.join(",")}}`,
+    en: probationDays !== null ? `The transaction must not happen during the ${probationDays}-day probation period.` : "The employee must be active on the effective date.",
+    ar: probationDays !== null ? `يجب ألا تحدث المعاملة خلال فترة التجربة البالغة ${probationDays} يوماً.` : "يجب أن يكون الموظف على رأس العمل في تاريخ السريان.",
+    machine: `${rule.id}:status@effective∈{${allowedStatuses.join(",")}}${probationDays !== null ? `;probation=${probationDays}` : ""}`,
   };
+  if (exemptTypes.includes(txn.type)) return notApplicable();
   const emp = indexes.employeeById.get(txn.employeeId);
   if (!emp) {
     return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-004"], caveats: [{ code: "DQ-004", message: { en: `Employee ${txn.employeeId} is not in the employee master.`, ar: `الموظف ${txn.employeeId} غير موجود في بيانات الموظفين.` }, facts: [txn.employeeId] }] }), requirement: req };
@@ -388,41 +500,56 @@ function eligibility(txn: Transaction, rule: RuleSpec, p: Record<string, unknown
   if (!eff) {
     return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [] }), requirement: req };
   }
-  const effActive = activeAt(emp, eff);
+  const stateAt = pointInTimeStatus(emp, eff);
+  const inProbation = probationDays !== null && emp.hireDate !== null && eff > emp.hireDate && diffDays(eff, emp.hireDate) <= probationDays;
+  // ON_LEAVE is still employed (an approved leave does not end employment); a
+  // policy that says "active" is about the employment relationship, while
+  // SUSPENDED and EXITED are not active. The status remains in the evidence.
+  const passesStatus = allowedStatuses.includes(stateAt) || (stateAt === "ON_LEAVE" && allowedStatuses.includes("ACTIVE"));
+  const passes = probationDays !== null ? !inProbation : passesStatus;
   const caveats: Caveat[] = [];
-  if (eff > (txn.effectiveDate ? eff : eff)) void caveats;
   const facts: EvidenceFact[] = [
     fact("employee_id", emp.employeeId, `employee ${emp.employeeId}`, `الموظف ${emp.employeeId}`, "employee_master", "employee.id"),
+    fact("amount_fils", txn.amountFils, txn.amountFils === null ? "no amount" : `AED ${formatAmount(txn.amountFils)}`, txn.amountFils === null ? "لا يوجد مبلغ" : `${formatAmount(txn.amountFils)} درهم`, "transaction", "txn.amount_fils"),
     fact("hire_date", emp.hireDate, emp.hireDate ? `hired ${emp.hireDate}` : "hire date unknown", emp.hireDate ? `التعيين ${emp.hireDate}` : "تاريخ التعيين غير معروف", "employee_master", "employee.hire_date"),
-    fact("exit_date", emp.exitDate, emp.exitDate ? `exit ${emp.exitDate}` : "no exit date", emp.exitDate ? `المغادرة ${emp.exitDate}` : "لا يوجد تاريخ مغادرة", "employee_master", "employee.exit_date", !effActive),
-    fact("effective_date", eff, `effective ${eff}`, `السريان ${eff}`, "transaction", "txn.effective_date", !effActive),
-    fact("status_at_effective", effActive ? "ACTIVE" : "NOT_ACTIVE", effActive ? "active on the effective date" : "not active on the effective date", effActive ? "على رأس العمل في تاريخ السريان" : "ليس على رأس العمل في تاريخ السريان", "derived", "spells@effective", !effActive),
+    fact("exit_date", emp.exitDate, emp.exitDate ? `exit ${emp.exitDate}` : "no exit date", emp.exitDate ? `المغادرة ${emp.exitDate}` : "لا يوجد تاريخ مغادرة", "employee_master", "employee.exit_date", !passes),
+    fact("effective_date", eff, `effective ${eff}`, `السريان ${eff}`, "transaction", "txn.effective_date", !passes),
+    fact("status_at_effective", stateAt, `status at effective date: ${stateAt}`, `الحالة في تاريخ السريان: ${stateAt}`, "derived", "spells@effective", !passesStatus),
+    ...(probationDays !== null ? [fact("in_probation", inProbation, inProbation ? `within ${probationDays} days of hire` : "probation ended", inProbation ? `خلال ${probationDays} يوماً من التعيين` : "انتهت فترة التجربة", "derived", "probation", inProbation)] : []),
   ];
-  const slots: FamilyEval["slots"] = { employeeId: emp.employeeId, exitDate: emp.exitDate, hireDate: emp.hireDate, effectiveDate: eff, statusAt: effActive ? "ACTIVE" : "NOT_ACTIVE" };
-  if (effActive) return pass(facts, req, { left: "status at effective date", op: "∈", right: allowedStatuses.join("|"), result: "active" }, slots);
-  return fail(facts, req, { left: "status at effective date", op: "∈", right: allowedStatuses.join("|"), result: "not active" }, slots);
+  const slots: FamilyEval["slots"] = { employeeId: emp.employeeId, exitDate: emp.exitDate, hireDate: emp.hireDate, effectiveDate: eff, statusAt: stateAt, inProbation };
+  if (passes) return pass(facts, req, { left: "status at effective date", op: "∈", right: probationDays !== null ? `not within ${probationDays} days of hire` : allowedStatuses.join("|"), result: "met" }, slots, [], caveats);
+  return fail(facts, req, { left: "status at effective date", op: "∈", right: probationDays !== null ? `not within ${probationDays} days of hire` : allowedStatuses.join("|"), result: inProbation ? "inside probation" : `status ${stateAt}` }, slots, [], caveats);
 }
 
 function aggregateLimit(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, indexes: EngineIndexes): FamilyEval {
   const windowDays = p.windowDays as number;
   const max = p.max as number;
+  const metric = (p.metric as string) === "sum" ? "sum" : "count";
   const req: FamilyEval["requirement"] = {
-    en: `At most ${max} allowance changes per employee in any ${Math.round(windowDays / 30)}-month period.`,
-    ar: `${max} تغييرات على البدل كحد أقصى لكل موظف في أي فترة ${Math.round(windowDays / 30)} أشهر.`,
-    machine: `${rule.id}:count@${windowDays}d<=${max}`,
+    en: metric === "sum" ? `At most AED ${formatAmount(max)} of ${txn.type.toLowerCase()} per employee in any ${Math.round(windowDays / 30)}-month period.` : `At most ${max} ${txn.type.toLowerCase()} transactions per employee in any ${Math.round(windowDays / 30)}-month period.`,
+    ar: metric === "sum" ? `الحد الأقصى ${formatAmount(max)} درهم من ${txn.type} لكل موظف في أي فترة ${Math.round(windowDays / 30)} أشهر.` : `${max} معاملة ${txn.type} كحد أقصى لكل موظف في أي فترة ${Math.round(windowDays / 30)} أشهر.`,
+    machine: `${rule.id}:${metric}@${windowDays}d<=${max}`,
   };
-  const agg = rollingAggregate(txn, indexes, windowDays);
   if (!txn.effectiveDate) {
     return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [] }), requirement: req };
   }
+  const agg = rollingAggregate(txn, indexes, windowDays, metric);
+  if (metric === "sum" && agg.missingAmounts > 0) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "An amount inside the aggregation window is missing.", ar: "مبلغ داخل نافذة التجميع غير موجود." }, facts: [] }] }), requirement: req };
+  }
+  const actual = metric === "sum" ? agg.sumFils : agg.count;
+  const breached = actual > max;
   const facts: EvidenceFact[] = [
-    fact("count_in_window", agg.count, `${agg.count} changes in the window`, `${agg.count} تغييرات في النافذة`, "derived", "aggregate.count", agg.count > max),
-    fact("max", max, `max ${max}`, `الحد ${max}`, "config", "rule.max"),
-    fact("contributing", agg.contributing.join(", "), `contributing: ${agg.contributing.join(", ")}`, `المساهِمات: ${agg.contributing.join("، ")}`, "derived", "aggregate.contributing", agg.count > max),
+    fact("window_months", Math.round(windowDays / 30), `${Math.round(windowDays / 30)} months`, `${Math.round(windowDays / 30)} أشهر`, "config", "rule.window_months"),
+    fact("metric", metric, metric, metric, "config", "rule.metric"),
+    fact("value_in_window", actual, metric === "sum" ? `AED ${formatAmount(actual)} in the window` : `${actual} changes in the window`, metric === "sum" ? `${formatAmount(actual)} درهم في النافذة` : `${actual} تغييرات في النافذة`, "derived", `aggregate.${metric}`, breached),
+    fact("max", max, metric === "sum" ? `max AED ${formatAmount(max)}` : `max ${max}`, metric === "sum" ? `الحد ${formatAmount(max)} درهم` : `الحد ${max}`, "config", "rule.max"),
+    fact("contributing", agg.contributing.join(", "), `contributing: ${agg.contributing.join(", ")}`, `المساهِمات: ${agg.contributing.join("، ")}`, "derived", "aggregate.contributing", breached),
   ];
-  const slots: FamilyEval["slots"] = { count: agg.count, max, windowDays, contributing: agg.contributing.join(", "), employeeId: txn.employeeId, windowStart: txn.effectiveDate };
-  if (agg.count <= max) return pass(facts, req, { left: `${agg.count} changes`, op: "≤", right: `${max}`, result: "within the limit" }, slots);
-  return fail(facts, req, { left: `${agg.count} changes`, op: "≤", right: `${max}`, result: "the limit is exceeded" }, slots);
+  const slots: FamilyEval["slots"] = { count: agg.count, max, metric, sumFils: agg.sumFils, windowDays, contributing: agg.contributing.join(", "), employeeId: txn.employeeId, windowStart: txn.effectiveDate };
+  if (!breached) return pass(facts, req, { left: metric === "sum" ? `${formatAmount(actual)}` : `${actual} changes`, op: "≤", right: metric === "sum" ? formatAmount(max) : `${max}`, result: "within the limit" }, slots);
+  return fail(facts, req, { left: metric === "sum" ? `${formatAmount(actual)}` : `${actual} changes`, op: "≤", right: metric === "sum" ? formatAmount(max) : `${max}`, result: "the limit is exceeded" }, slots);
 }
 
 function duplicate(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, indexes: EngineIndexes): FamilyEval {
@@ -433,8 +560,11 @@ function duplicate(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>,
     ar: `يجب عدم إدخال نفس التغيير مرتين خلال ${toleranceDays} أيام.`,
     machine: `${rule.id}:twin@${toleranceDays}d flag:${flag}`,
   };
-  if (txn.amountFils === null || txn.effectiveDate === null || txn.dq.includes("DQ-013")) {
+  if (txn.dq.includes("DQ-013")) {
     return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-013"], caveats: [{ code: "DQ-013", message: { en: "The amount is ambiguous, so duplicate matching cannot run.", ar: "المبلغ غامض، لذا تعذر تشغيل مطابقة التكرار." }, facts: [] }] }), requirement: req };
+  }
+  if (txn.amountFils === null || txn.effectiveDate === null) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The amount or effective date is missing, so duplicate matching cannot run.", ar: "المبلغ أو تاريخ السريان غير موجود، لذا تعذر تشغيل مطابقة التكرار." }, facts: [] }] }), requirement: req };
   }
   const twins = duplicateTwins(txn, indexes, toleranceDays);
   if (twins.length === 0) {
@@ -443,7 +573,6 @@ function duplicate(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>,
       req, { left: "twins", op: "=", right: "0", result: "none" }, { twins: 0 }
     );
   }
-  const laterOf = (a: Transaction, b: Transaction) => (isLaterTwin(a, b) ? a : b);
   let flagged = txn;
   let cited = twins[0]!;
   if (flag === "later") {
@@ -456,13 +585,15 @@ function duplicate(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>,
     }
     flagged = txn;
     cited = twins.reduce((a, b) => (isLaterTwin(a, b) ? a : b));
-    void laterOf;
+  } else {
+    // flag=both: cite the earliest twin of this pair.
+    cited = twins.reduce((a, b) => (isLaterTwin(a, b) ? b : a));
   }
   const daysApart = Math.abs(diffDays(flagged.effectiveDate!, cited.effectiveDate!));
   const facts: EvidenceFact[] = [
     fact("txn_a", cited.txnId, `earlier ${cited.txnId} effective ${cited.effectiveDate}`, `الأقدم ${cited.txnId} سريان ${cited.effectiveDate}`, "transaction", "twins"),
     fact("txn_b", flagged.txnId, `this ${flagged.txnId} effective ${flagged.effectiveDate}`, `الحالية ${flagged.txnId} سريان ${flagged.effectiveDate}`, "transaction", "txn", true),
-    fact("amount_fils", flagged.amountFils, `AED ${((flagged.amountFils ?? 0) / 100).toLocaleString("en-US")}`, `${((flagged.amountFils ?? 0) / 100).toLocaleString("en-US")} درهم`, "transaction", "txn.amount_fils"),
+    fact("amount_fils", flagged.amountFils, `AED ${formatAmount(flagged.amountFils ?? 0)}`, `${formatAmount(flagged.amountFils ?? 0)} درهم`, "transaction", "txn.amount_fils"),
     fact("days_apart", daysApart, `${daysApart} days apart`, `بفارق ${daysApart} أيام`, "derived", "dates", true),
   ];
   const bothEffective = flagged.effectiveDate !== null && cited.effectiveDate !== null;
@@ -476,12 +607,16 @@ function referenceIntegrity(txn: Transaction, rule: RuleSpec, p: Record<string, 
     ar: "يجب أن يكون كل معتمِم موجوداً في بيانات الموظفين وعلى رأس عمله وقت الموافقة.",
     machine: `${rule.id}:approvers exist+active@approval`,
   };
+  if (txn.approvals === null) {
+    return { ...notEvaluable(rule, "C1", [], { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "The approvals column is missing; references cannot be checked.", ar: "عمود الموافقات غير موجود؛ لا يمكن التحقق من المراجع." }, facts: [] }] }), requirement: req };
+  }
   const apps = humanApprovers(txn);
   if (!apps.length) {
     return pass([fact("approvers", 0, "no approvers to check", "لا يوجد معتمِمون للتحقق", "transaction", "txn.approvals")], req, { left: "approvers", op: "exist", right: "in master", result: "none recorded" }, { approverCount: 0 });
   }
   const facts: EvidenceFact[] = [];
   const problemApprovers: { id: string; problem: string }[] = [];
+  const unknownApprovers: { id: string; problem: string }[] = [];
   for (const a of apps) {
     const master = indexes.employeeById.get(a.approverId ?? "");
     if (!master) {
@@ -489,19 +624,34 @@ function referenceIntegrity(txn: Transaction, rule: RuleSpec, p: Record<string, 
       facts.push(fact("approver", a.approverId, `approver ${a.approverId} not found in the employee master`, `المعتمِم ${a.approverId} غير موجود في بيانات الموظفين`, "derived", "master", true));
       continue;
     }
-    const at = a.approvedAt ? instantToDubaiDate(a.approvedAt) : txn.effectiveDate;
-    const ok = at ? activeAt(master, at) : false;
+    if (!a.approvedAt) {
+      unknownApprovers.push({ id: a.approverId ?? "?", problem: "approval timestamp is missing" });
+      facts.push(fact("approver", a.approverId, `approver ${a.approverId} has no approval timestamp, so activity at approval time is unknown`, `المعتمِم ${a.approverId} ليس لديه وقت موافقة، لذا نشاطه وقت الموافقة غير معروف`, "transaction", "txn.approvals", false));
+      continue;
+    }
+    const at = instantToDubaiDate(a.approvedAt);
+    const ok = activeAt(master, at);
     if (!ok) {
-      const reason = master.exitDate && at && master.exitDate < at ? "had already left when the approval was recorded" : "was not active at approval time";
+      const reason = master.hireDate && master.hireDate > at
+        ? "had not been hired when the approval was recorded"
+        : master.exitDate && master.exitDate < at
+          ? "had already left when the approval was recorded"
+          : "was not active at approval time";
       problemApprovers.push({ id: a.approverId ?? "?", problem: reason });
-      facts.push(fact("approver", a.approverId, `approver ${a.approverId} ${reason} (exit ${master.exitDate ?? "?"}, approval ${at ?? "?"})`, `المعتمِم ${a.approverId} ${reason === "had already left when the approval was recorded" ? "كان قد غادر عند تسجيل الموافقة" : "لم يكن على رأس عمله وقت الموافقة"} (المغادرة ${master.exitDate ?? "؟"}، الموافقة ${at ?? "؟"})`, "employee_master", "master", true));
+      facts.push(fact("approver", a.approverId, `approver ${a.approverId} ${reason} (exit ${master.exitDate ?? "?"}, approval ${at})`, `المعتمِم ${a.approverId} لم يكن على رأس عمله وقت الموافقة (المغادرة ${master.exitDate ?? "؟"}، الموافقة ${at})`, "employee_master", "master", true));
     } else {
       facts.push(fact("approver", a.approverId, `approver ${a.approverId} exists and was active at approval time`, `المعتمِم ${a.approverId} موجود وكان على رأس عمله وقت الموافقة`, "employee_master", "master"));
     }
   }
   const slots: FamilyEval["slots"] = { personId: problemApprovers[0]?.id ?? "", problem: problemApprovers[0]?.problem ?? "", approverCount: apps.length };
-  if (problemApprovers.length === 0) return pass(facts, req, { left: "all approvers", op: "exist+active", right: "at approval", result: "met" }, slots);
-  return fail(facts, req, { left: "approvers", op: "exist+active", right: "at approval", result: problemApprovers.map((x) => `${x.id}: ${x.problem}`).join("; ") }, slots);
+  const dq: DqCode[] = problemApprovers.some((p) => p.problem === "not found in the employee master") ? ["DQ-005"] : [];
+  if (problemApprovers.length > 0) {
+    return fail(facts, req, { left: "approvers", op: "exist+active", right: "at approval", result: problemApprovers.map((x) => `${x.id}: ${x.problem}`).join("; ") }, slots, dq);
+  }
+  if (unknownApprovers.length > 0) {
+    return { ...notEvaluable(rule, "C1", facts, { dq: ["DQ-001"], caveats: [{ code: "DQ-001", message: { en: "An approval timestamp is missing, so activity at approval time is unknown.", ar: "وقت الموافقة غير موجود، لذا نشاط المعتمِم وقت الموافقة غير معروف." }, facts: unknownApprovers.map((x) => x.id) }] }), requirement: req };
+  }
+  return pass(facts, req, { left: "all approvers", op: "exist+active", right: "at approval", result: "met" }, slots);
 }
 
 function valueBounds(txn: Transaction, rule: RuleSpec, p: Record<string, unknown>, indexes: EngineIndexes): FamilyEval {
@@ -526,27 +676,27 @@ function valueBounds(txn: Transaction, rule: RuleSpec, p: Record<string, unknown
   const gradesWithSource = apps.map((a) => approverGrade(txn, a, indexes));
   const dqGrades = gradesWithSource.map((g) => g.dq).filter((x): x is DqCode => x !== null);
   const facts: EvidenceFact[] = [
-    fact("amount_fils", txn.amountFils, `AED ${((txn.amountFils ?? 0) / 100).toLocaleString("en-US")}`, `${((txn.amountFils ?? 0) / 100).toLocaleString("en-US")} درهم`, "transaction", "txn.amount_fils", over),
-    fact("base_fils", baseFils, `base AED ${((baseFils ?? 0) / 100).toLocaleString("en-US")} (${baseSource})`, `الأساس ${((baseFils ?? 0) / 100).toLocaleString("en-US")} درهم (${baseSource === "previous_pay_transaction" ? "من معاملة سابقة" : "من البيانات الرئيسية"})`, "derived", "base"),
+    fact("amount_fils", txn.amountFils, `AED ${formatAmount(txn.amountFils ?? 0)}`, `${formatAmount(txn.amountFils ?? 0)} درهم`, "transaction", "txn.amount_fils", over),
+    fact("base_fils", baseFils, `base AED ${formatAmount(baseFils ?? 0)} (${baseSource})`, `الأساس ${formatAmount(baseFils ?? 0)} درهم (${baseSource === "previous_pay_transaction" ? "من معاملة سابقة" : "من البيانات الرئيسية"})`, "derived", "base"),
     fact("pay_change_pct", pctWhole, `${pctWhole}% increase`, `زيادة ${pctWhole}%`, "derived", "pct", over),
     fact("pct_max", pctMax, `max ${pctMax}%`, `الحد ${pctMax}%`, "config", "rule.pct_max"),
     ...gradesWithSource.map((g, i) => fact("approver_grade", g.ordinal, `approver grade ${g.ordinal ?? "unknown"}`, `درجة المعتمِم ${g.ordinal ?? "غير معروفة"}`, "transaction", `txn.approvals.${i}`, over && (g.ordinal ?? 0) < (overrideGrade ?? 0))),
   ];
   const caveats: Caveat[] = caveat ? [caveat] : [];
   if (over && overrideGrade !== null) {
-    if (dqGrades.includes("DQ-005") || dqGrades.includes("DQ-011")) {
-      return { ...notEvaluable(rule, "C1", facts, { dq: dqGrades, caveats }), requirement: req };
-    }
     const known = gradesWithSource.filter((g) => g.ordinal !== null);
-    if (!known.length) return { ...notEvaluable(rule, "C1", facts, { dq: ["DQ-001"], caveats }), requirement: req };
-    const meets = known.some((g) => g.ordinal! >= overrideGrade!);
-    const slots: FamilyEval["slots"] = { pctBps, pctDisplay: pctWhole, pctMax, baseFils, requiredGrade: overrideGrade, approverGrade: known[0]!.ordinal, approverId: apps[0]?.approverId ?? null };
-    if (meets) return pass(facts, req, { left: `${pctWhole}% with grade ${known[0]!.ordinal} approver`, op: "override", right: `grade ${overrideGrade}`, result: "approved at the required grade" }, slots, [], caveats);
-    return fail(facts, req, { left: `${pctWhole}%`, op: ">", right: `${pctMax}% without grade ${overrideGrade}`, result: "increase over the bound without the required grade" }, slots, [], caveats);
+    const meeting = known.find((g) => g.ordinal! >= overrideGrade);
+    const slots: FamilyEval["slots"] = { pctBps, pctDisplay: pctWhole, pctMax, baseFils, requiredGrade: overrideGrade, approverGrade: meeting?.ordinal ?? known[0]?.ordinal ?? null, approverId: meeting ? apps[known.indexOf(meeting)]?.approverId ?? null : apps[0]?.approverId ?? null };
+    if (meeting) return pass(facts, req, { left: `${pctWhole}% with grade ${meeting.ordinal} approver`, op: "override", right: `grade ${overrideGrade}`, result: "approved at the required grade" }, slots, dqGrades, caveats);
+    if (known.length < apps.length) {
+      // An unknown grade could meet the override: never guess.
+      return { ...notEvaluable(rule, "C1", facts, { dq: dqGrades.length ? dqGrades : ["DQ-001"], caveats }), requirement: req };
+    }
+    return fail(facts, req, { left: `${pctWhole}%`, op: ">", right: `${pctMax}% without grade ${overrideGrade}`, result: known.length ? "increase over the bound without the required grade" : "increase over the bound with no approval" }, slots, dqGrades, caveats);
   }
   const slots2: FamilyEval["slots"] = { pctBps, pctDisplay: pctWhole, pctMax, baseFils, requiredGrade: overrideGrade };
-  if (!over) return pass(facts, req, { left: `${pctWhole}%`, op: "≤", right: `${pctMax}%`, result: "within the bound" }, slots2, [], caveats);
-  return fail(facts, req, { left: `${pctWhole}%`, op: ">", right: `${pctMax}%`, result: "over the bound" }, slots2, [], caveats);
+  if (!over) return pass(facts, req, { left: `${pctWhole}%`, op: "≤", right: `${pctMax}%`, result: "within the bound" }, slots2, dqGrades, caveats);
+  return fail(facts, req, { left: `${pctWhole}%`, op: ">", right: `${pctMax}%`, result: "over the bound" }, slots2, dqGrades, caveats);
 }
 
 export function employeeGradeOrdinal(emp: Employee | null): number | null {

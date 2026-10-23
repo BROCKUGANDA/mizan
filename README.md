@@ -132,3 +132,7 @@ finding_format.csv ┘      ▼
 - `docs/runbooks/RB-01..08` — detect/contain/recover/verify/communicate.
 - `docs/RAI_STATEMENT.md`, `docs/SOLUTION_NOTE.md`, `docs/PILOT_PLAN.md`, `docs/DEMO_SCRIPT.md`, `docs/QA_CARDS.md`.
 - `worklog.md` — build log.
+
+## License
+
+MIT — see [LICENSE](LICENSE). The synthetic data pack contains no personal data.

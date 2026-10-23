@@ -167,22 +167,6 @@ function Shell() {
             </span>
           ) : null}
 
-          <nav aria-label="Main" className="ms-2 hidden min-w-0 flex-1 items-center gap-1 overflow-x-auto lg:flex">
-            {NAV.map((n) => (
-              <button
-                key={n.key}
-                onClick={() => setView(n.key)}
-                aria-current={view === n.key ? "page" : undefined}
-                data-active={view === n.key}
-                className={`nav-underline rounded-md px-3 py-1.5 text-sm transition-colors duration-200 ${
-                  view === n.key ? "bg-accent font-medium text-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground"
-                }`}
-              >
-                {t(n.labelKey)}
-              </button>
-            ))}
-          </nav>
-
           <div className="ms-auto flex flex-wrap items-center gap-1.5">
             <ModeChip mode={mode} />
             <div className="relative">
@@ -280,7 +264,7 @@ function Shell() {
             </DropdownMenu>
           </div>
         </div>
-        <nav aria-label="Sections" className="mx-auto flex max-w-7xl items-center gap-1 overflow-x-auto px-4 pb-2 lg:hidden">
+        <nav aria-label="Main" className="mx-auto flex max-w-7xl items-center gap-1 overflow-x-auto px-4 pb-2">
           {NAV.map((n) => (
             <button
               key={n.key}

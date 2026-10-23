@@ -31,6 +31,28 @@ export interface DqRow {
   rowNumber: number;
 }
 
+const DQ_MESSAGES: Record<string, string> = {
+  "DQ-001": "Required field missing",
+  "DQ-002": "Unparseable date",
+  "DQ-003": "Day-month order resolved by default",
+  "DQ-004": "Employee not in the master data",
+  "DQ-005": "Approver not in the master data",
+  "DQ-006": "Unknown transaction type",
+  "DQ-007": "Unknown document type",
+  "DQ-008": "Duplicate transaction ID with different content",
+  "DQ-009": "Currency other than AED",
+  "DQ-010": "Management-chain cycle",
+  "DQ-011": "Grade not on the ladder",
+  "DQ-013": "Amount ambiguous or out of bounds",
+  "DQ-016": "Status value not mapped",
+  "DQ-017": "Instruction-like text in a free-text field",
+  "DQ-018": "Field or line exceeds size limits",
+};
+
+export function dqMessage(dq: string): string {
+  return DQ_MESSAGES[dq] ?? dq;
+}
+
 const goldenKey = (r: { transaction_id?: string; rule_id?: string; clause_id?: string }): string => `${r.transaction_id ?? ""}|${r.rule_id ?? ""}|${r.clause_id ?? ""}`;
 const GOLDEN_DISPLAY_IDS = new Map(EXPORT_PROFILE.goldenRows.map((r) => [goldenKey(r), r.finding_id]));
 

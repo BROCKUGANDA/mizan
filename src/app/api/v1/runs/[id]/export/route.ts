@@ -2,7 +2,7 @@ import { withApiRoute, json } from "@/lib/server/api";
 import { NextResponse } from "next/server";
 import { db } from "@/lib/db";
 import { MzError } from "@/lib/domain/errors";
-import { renderFindingsCsv, renderDataQualityCsv, validateFindingsCsv, type FindingRow, type DqRow } from "@/lib/server/export";
+import { renderFindingsCsv, renderDataQualityCsv, validateFindingsCsv, dqMessage, type FindingRow, type DqRow } from "@/lib/server/export";
 import { EXPORT_PROFILE } from "@/lib/pack/finding-format";
 import { loadTransactions } from "@/lib/server/run-pipeline";
 import { appendAudit } from "@/lib/audit/chain";
@@ -113,23 +113,3 @@ function evidenceOf(raw: string): Record<string, unknown> {
   }
 }
 
-function dqMessage(dq: string): string {
-  const M: Record<string, string> = {
-    "DQ-001": "Required field missing",
-    "DQ-002": "Unparseable date",
-    "DQ-003": "Day-month order resolved by default",
-    "DQ-004": "Employee not in the master data",
-    "DQ-005": "Approver not in the master data",
-    "DQ-006": "Unknown transaction type",
-    "DQ-007": "Unknown document type",
-    "DQ-008": "Duplicate transaction ID with different content",
-    "DQ-009": "Currency other than AED",
-    "DQ-010": "Management-chain cycle",
-    "DQ-011": "Grade not on the ladder",
-    "DQ-013": "Amount ambiguous or out of bounds",
-    "DQ-016": "Status value not mapped",
-    "DQ-017": "Instruction-like text in a free-text field",
-    "DQ-018": "Field or line exceeds size limits",
-  };
-  return M[dq] ?? dq;
-}

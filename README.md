@@ -39,10 +39,15 @@ it.
 ## Running on the hidden test file
 
 1. Put the file anywhere, then run
-   `bun run mizan hidden-test <file> [--employees data/pack/employees.csv]`.
+   `bun run mizan hidden-test <file> [--employees data/pack/employees.csv] [--as-of YYYY-MM-DD]`.
    This hashes the input, writes a distribution-shift report, runs the frozen
-   pack, validates the findings structurally and records a run manifest with
-   the findings checksum under `output/hidden-<sha>/`.
+   pack twice (the determinism check), validates the findings structurally and
+   writes `findings.csv`, `data_quality.csv` and a `run-manifest.json` with the
+   input hash, pack/calendar hashes, census counts, output hash and findings
+   checksum under `output/hidden-<sha>/`. As-of defaults to the day after the
+   latest effective date in the file, exactly as a server run does. The command
+   exits non-zero unless the census balances, the validator passes and both
+   evaluations agree byte-for-byte.
 2. Or use Runs → Upload in the UI. Uploads are limited to 50 MB, 1 MB per line
    and 2M rows; they are PII-scanned, content-hashed (dedup), mapped through
    header synonyms and quarantined by DQ code.
@@ -51,6 +56,16 @@ it.
 4. Follow runbook RB-05 for the T−72h protocol: freeze the pack, fix only
    normalisation/adapters, add a regression case for each change, never
    hand-edit outputs.
+
+The offline CLI and the running product agree exactly: on the seed-42 pack both
+produce 49 findings, 13 data-quality rows and output hash
+`ecefa394f4d1237fe2ff513324d563d703dac5346e0a1cfd61cd50ab3dcd0a26`.
+
+## Submission artefacts
+
+`submission/` holds the challenge deliverables: the narrated 2:40 demo video, the
+two-page solution note PDF, the training-pack findings that prove the output
+format, and a README mapping each deliverable to where it is produced.
 
 ## Tests and gates
 

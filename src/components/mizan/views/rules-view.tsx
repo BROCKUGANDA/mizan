@@ -881,7 +881,7 @@ export default function RulesView() {
               </Collapsible>
 
               <div className="flex flex-wrap items-center gap-3">
-                <Button type="button" onClick={onParse} disabled={parseDraft.isPending || (!draftText && !(guidedOpen && guided.family))}>
+                <Button type="button" onClick={onParse} disabled={!canDraft || parseDraft.isPending || (!draftText && !(guidedOpen && guided.family))}>
                   {parseDraft.isPending ? <Loader2 className="me-1.5 h-4 w-4 animate-spin" aria-hidden /> : <Sparkles className="me-1.5 h-4 w-4" aria-hidden />}
                   Parse into a draft spec
                 </Button>

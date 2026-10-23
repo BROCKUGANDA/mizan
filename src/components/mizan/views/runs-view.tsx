@@ -258,7 +258,16 @@ export default function RunsView() {
   });
 
   const detail = detailQuery.data;
-  const canExport = detail != null && DONE_STATUSES.includes(detail.status);
+  const roleQuery = useQuery<{ actors: { id: string; role: string }[] }>({
+    queryKey: ["system-state", actor],
+    queryFn: () => api(v1("/system/state")),
+    staleTime: POLL.staleMs.runs,
+  });
+  const actorRole = roleQuery.data?.actors.find((a) => a.id === actor)?.role ?? null;
+  const EXPORT_ROLES = ["analyst", "team_lead", "auditor", "compliance_lead", "admin", "policy_approver"];
+  const canExportRole = actorRole === null || EXPORT_ROLES.includes(actorRole);
+  const runFinished = detail != null && DONE_STATUSES.includes(detail.status);
+  const canExport = runFinished && canExportRole;
   const exportQuery = useQuery<ExportBundle>({
     queryKey: ["export", selectedId],
     queryFn: () => api<ExportBundle>(v1(`/runs/${selectedId as string}/export`)),
@@ -592,7 +601,11 @@ export default function RunsView() {
 
                 {!canExport ? (
                   <p className="text-xs text-muted-foreground" role="note">
-                    {t("runs.exportLocked")}
+                    {runFinished && !canExportRole
+                      ? (locale === "ar"
+                          ? "دورك لا يسمح بتصدير النتائج. يمكن للمحلل أو قائد الفريق أو المدقق أو قائد الامتثال أو المدير القيام بذلك."
+                          : "Your role cannot export findings. An analyst, team lead, auditor, compliance lead or administrator can.")
+                      : t("runs.exportLocked")}
                   </p>
                 ) : exportQuery.isPending ? (
                   <LoadingSkeleton rows={2} />

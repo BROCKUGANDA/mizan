@@ -1,0 +1,14 @@
+transaction_id,dq_code,message,row_number
+TXN-2004,DQ-001,Required field missing,1005
+TXN-70001,DQ-008,Duplicate transaction ID with different content,1059
+TXN-DQ-0003,DQ-003,Day-month order resolved by default,1057
+TXN-DQ-0004,DQ-004,Employee not in the master data,1051
+TXN-DQ-0006,DQ-006,Unknown transaction type,1052
+TXN-DQ-0009,DQ-009,Currency other than AED,1053
+TXN-DQ-0011,DQ-011,Grade not on the ladder,1060
+TXN-DQ-0013,DQ-013,Amount ambiguous or out of bounds,1054
+TXN-DQ-0016,DQ-016,Status value not mapped,1061
+TXN-DQ-0021,DQ-017,Instruction-like text in a free-text field,1056
+TXN-HIRE-0002,DQ-007,Unknown document type,1047
+TXN-REF-0001,DQ-005,Approver not in the master data,1048
+TXN-TRF-0001,DQ-001,Required field missing,1045

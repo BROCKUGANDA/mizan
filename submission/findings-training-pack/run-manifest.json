@@ -1,0 +1,44 @@
+{
+  "input": {
+    "file": "data/pack/transactions.csv",
+    "sha256": "1273fb2eafb0dc147755ff92436d525b85fe7553276cd6bb987da14ab2f5f1f6",
+    "rows": 1061
+  },
+  "engineVersion": "engine-1.0.0",
+  "packVersion": "emirates-hr-1.0.0",
+  "packHash": "dbed3e1517b8eecea3115241d6ef94c69d444563c49cfee49180fec1389303b5",
+  "calendarHash": "41fd041b785c4a07a8005df8f54da2b4c91df4b9c929ce8b96fcccbe68486a79",
+  "asOf": "2026-03-29",
+  "counts": {
+    "transactions": 1061,
+    "rules": 13,
+    "clauses": 15,
+    "checks": 15915,
+    "applicable": 6415,
+    "notApplicable": 9500,
+    "evaluated": 6393,
+    "notEvaluable": 22,
+    "passed": 6344,
+    "failed": 49,
+    "quarantined": 0,
+    "held": 0,
+    "dqExceptions": 0
+  },
+  "outputHash": "ecefa394f4d1237fe2ff513324d563d703dac5346e0a1cfd61cd50ab3dcd0a26",
+  "findingsSha256": "f2c03fde3d7b5d1537bf63e080572af76cfee93add1f63f32ab0ff1bb657553d",
+  "dataQualityRows": 13,
+  "dataQualitySha256": "9fd4e6dcedd1c697edac872f4181d7edbe95e5c1c590ce6dfdbbc475ba76cf9c",
+  "validation": {
+    "ok": true,
+    "structuralErrors": [],
+    "goldenApplicable": false
+  },
+  "determinism": {
+    "runs": 2,
+    "identical": true
+  },
+  "census": {
+    "ok": true,
+    "errors": []
+  }
+}

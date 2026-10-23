@@ -293,7 +293,7 @@ function DrawerBody({ queryKey0, payload, isPending, isError, errorMessage, erro
       if (!exc) throw new Error(L("Exception not loaded.", "الاستثناء غير محمّل."));
       return api<{ ok: boolean; status: string; countersignedBy: string }>(v1(`/exceptions/${encodeURIComponent(exc.exceptionKey)}/countersign`), {
         method: "POST",
-        headers: { "Idempotency-Key": crypto.randomUUID() },
+        headers: { "If-Match": `W/"${exc.version}"`, "Idempotency-Key": crypto.randomUUID() },
         body: asBody({}),
       });
     },

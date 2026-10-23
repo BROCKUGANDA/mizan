@@ -18,7 +18,7 @@ import { EXPORT_PROFILE as FORMAT, renderFindingFormatCsv } from "../src/lib/pac
 import { parseCsv, normaliseEmployees, normaliseTransactions } from "../src/lib/normalize";
 import { evaluate, assertCensus } from "../src/lib/engine/evaluate";
 import { UAE_CALENDAR } from "../src/lib/domain/calendar";
-import { validateFindingsCsv, renderFindingsCsv, parseCsvRows } from "../src/lib/server/export";
+import { validateFindingsCsv, renderFindingsCsv, renderDataQualityCsv, dqMessage, parseCsvRows } from "../src/lib/server/export";
 import { buildFindings, runBacktestSuite, renderReport } from "../src/lib/testkit/harness";
 import { packDataset, evaluateDataset, findingKeys, type Dataset } from "../src/lib/testkit/dataset";
 import { runMutations } from "../src/lib/testkit/mutations";
@@ -31,6 +31,7 @@ import { buildEvidencePack, verifyEvidencePack, type EvidencePack } from "../src
 import { getMode, setMode, type HealthMode } from "../src/lib/server/mode";
 import { listDlq, replayAllDlq, replayDlq } from "../src/lib/server/outbox";
 import { sha256 } from "../src/lib/domain/canonical";
+import { addDays } from "../src/lib/domain/dates";
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { PrismaClient } from "@prisma/client";
 
@@ -209,23 +210,52 @@ async function cmdHiddenTest(file: string): Promise<number> {
   const shift = buildShiftReport(train, test);
   writeFileSync(`${outDir}/shift_report.md`, renderShiftMarkdown(shift));
 
-  const first = evaluate({ transactions: test.transactions, employees: test.employees, pack: RULE_SPECS.filter((r) => r.status === "active"), config: { calendarVersion: UAE_CALENDAR.version, routingTableVersion: "routing-1.2.0" }, asOf: "2026-04-01", runId: "hidden-1" });
-  const second = evaluate({ transactions: test.transactions, employees: test.employees, pack: RULE_SPECS.filter((r) => r.status === "active"), config: { calendarVersion: UAE_CALENDAR.version, routingTableVersion: "routing-1.2.0" }, asOf: "2026-04-01", runId: "hidden-2" });
+  // as-of follows the data, exactly like a server run: the day after the latest
+  // effective date in the supplied file (FS-21 — as-of is an input, never a clock).
+  const asOf = argValue(process.argv.slice(3), "--as-of")
+    ?? addDays(test.transactions.reduce((acc, t) => (t.effectiveDate && t.effectiveDate > acc ? t.effectiveDate : acc), "2025-01-01"), 1);
+  const cfg = { calendarVersion: UAE_CALENDAR.version, routingTableVersion: "routing-1.2.0" };
+  const pack = RULE_SPECS.filter((r) => r.status === "active");
+  const first = evaluate({ transactions: test.transactions, employees: test.employees, pack, config: cfg, asOf, runId: "hidden-1" });
+  const second = evaluate({ transactions: test.transactions, employees: test.employees, pack, config: cfg, asOf, runId: "hidden-2" });
   const censusErrors = assertCensus(first.counts);
-  const built = buildFindings(test.transactions, test.employees, RULE_SPECS.filter((r) => r.status === "active"));
+  const built = buildFindings(test.transactions, test.employees, pack);
   const findingsCsv = renderFindingsCsv(built.rows);
   const validation = validateFindingsCsv(findingsCsv, { requireGolden: false });
+  // Same merge the server run does: normalisation tags plus any DQ code the
+  // engine raised while evaluating (e.g. grade off the ladder, date outside the calendar).
+  const dqCodesByRow = new Map<string, Set<string>>();
+  for (const t of test.transactions) {
+    if (!t.dq.length) continue;
+    dqCodesByRow.set(t.rowId, new Set(t.dq));
+  }
+  for (const r of first.results) {
+    if (!r.dq.length) continue;
+    const set = dqCodesByRow.get(r.rowId) ?? new Set<string>();
+    for (const dq of r.dq) set.add(dq);
+    dqCodesByRow.set(r.rowId, set);
+  }
+  const byRowId = new Map(test.transactions.map((t) => [t.rowId, t]));
+  const dqRows = [...dqCodesByRow.entries()].flatMap(([rowId, codes]) => {
+    const t = byRowId.get(rowId);
+    if (!t) return [];
+    return [...codes].map((code) => ({ txnId: t.txnId, dqCode: code, message: dqMessage(code), rowNumber: t.source.rowNumber }));
+  });
+  const dqCsv = renderDataQualityCsv(dqRows);
   writeFileSync(`${outDir}/findings.csv`, findingsCsv);
+  writeFileSync(`${outDir}/data_quality.csv`, dqCsv);
   const manifest = {
     input: { file, sha256: sha, rows: test.transactions.length },
     engineVersion: ENGINE_VERSION,
     packVersion: PACK_VERSION,
     packHash: sha256(JSON.stringify(RULE_SPECS.map((r) => ({ id: r.id, version: r.version, specHash: r.source.sha256 })))),
     calendarHash: sha256(JSON.stringify(UAE_CALENDAR)),
-    asOf: "2026-04-01",
+    asOf,
     counts: first.counts,
     outputHash: first.outputHash,
     findingsSha256: validation.findingsSha256,
+    dataQualityRows: dqRows.length,
+    dataQualitySha256: sha256(dqCsv),
     validation: { ok: validation.ok, structuralErrors: validation.structuralErrors, goldenApplicable: false },
     determinism: { runs: 2, identical: first.outputHash === second.outputHash },
     census: { ok: censusErrors.length === 0, errors: censusErrors },
@@ -234,8 +264,8 @@ async function cmdHiddenTest(file: string): Promise<number> {
   console.log(`hidden test ${file}`);
   console.log(`  sha256 ${sha}`);
   console.log(`  rows ${test.transactions.length} · checks ${first.counts.checks} · failed ${first.counts.failed} · NE ${first.counts.notEvaluable}`);
-  console.log(`  findings ${built.rows.length} · structural ${validation.ok ? "valid" : "INVALID"} · determinism ${manifest.determinism.identical ? "2/2" : "FAILED"}`);
-  console.log(`  wrote ${outDir}/findings.csv, run-manifest.json, shift_report.md`);
+  console.log(`  findings ${built.rows.length} · data-quality rows ${dqRows.length} · structural ${validation.ok ? "valid" : "INVALID"} · determinism ${manifest.determinism.identical ? "2/2" : "FAILED"}`);
+  console.log(`  wrote ${outDir}/findings.csv, data_quality.csv, run-manifest.json, shift_report.md`);
   return validation.ok && censusErrors.length === 0 && manifest.determinism.identical ? 0 : 1;
 }
 

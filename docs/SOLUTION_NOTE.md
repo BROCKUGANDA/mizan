@@ -85,15 +85,18 @@ the release checklist.
 
 ## Running inside Emirates' environment (~150 words)
 
-Three containers (web, API, workers) plus Postgres, Valkey-compatible cache and
-S3-compatible object storage with object lock; Docker Compose for a single-VM
-pilot, Helm for Kubernetes/OpenShift; fully offline (air-gapped profile bundles
-fonts, icons and calendars; telemetry to a local collector). Identity via OIDC
-with directory groups mapped to roles. Data in: scheduled read-only extracts to
-a landing zone, checksummed on arrival. Data out: notifications carry severity
-and a sign-on link only. AI: none required; optional local model on a GPU node
-or an approved in-country, zero-retention provider. Controls map to DESD/IA
-standards and ISO 27001; logs ship to the SIEM over syslog/OTLP.
+Production deployment is three containers (web, API, workers) plus Postgres,
+Valkey-compatible cache and S3-compatible object storage with object lock;
+Docker Compose for a single-VM pilot, Helm for Kubernetes/OpenShift; fully
+offline (air-gapped profile bundles fonts, icons and calendars; telemetry to a
+local collector). Identity via OIDC with directory groups mapped to roles. Data
+in: scheduled read-only extracts to a landing zone, checksummed on arrival. Data
+out: notifications carry severity and a sign-on link only. AI: none required;
+optional local model on a GPU node or an approved in-country, zero-retention
+provider. Controls map to DESD/IA standards and ISO 27001; logs ship to the SIEM
+over syslog/OTLP. This repository runs the whole product as one process on
+SQLite; the production seams above are the gap list in `docs/DEVIATIONS.md`, not
+a claim of what is wired here.
 
 ## Reuse and pilot plan (~130 words)
 
@@ -107,3 +110,23 @@ weeks 7–12 assisted mode with weekly metrics: decision coverage 100%, noise
 ratio ≤10%, deadline adherence ≥90%, fix stickiness +20% quarter on quarter.
 Support: on-call rota, runbooks RB-01..08, escalation contacts agreed with HR
 compliance, HRIS and IT.
+
+## Run it
+
+```
+git clone https://github.com/BROCKUGANDA/mizan && cd mizan
+bun install && bun run seed && bun run build && bun run start   # http://localhost:3000
+bun run verify        # 12 assurance gates   bun test   bun run typecheck
+bun run mizan hidden-test <test-file.csv>   # findings CSV + run manifest + checksums
+```
+
+## Evidence map
+
+| Criterion | Where a judge looks | Measured |
+| --- | --- | --- |
+| Detection accuracy | `bun run mizan hidden-test <file>`; `bun run mizan bench oracle` | 49 findings, 5/5 worked examples byte-identical, 100% SQL-oracle agreement, 0 near-miss false positives |
+| Explanation and routing | Exception drawer: what broke, verbatim rule, evidence with sources, why it matters, next action, owner, severity rationale | 8-part explanation on every finding, EN and AR; routing table version pinned in the run manifest |
+| Responsible AI and security | Audit page (`mizan audit verify` offline), decision API, `docs/SECURITY.md` | Chain verified in-app and offline; 20 decision/run events on the demo state; If-Match, idempotency, conflict-of-interest and countersign enforced server-side; 0 auto-closed exceptions |
+| Deployability and reuse | Rule studio (plain-English draft, ambiguity chips, generated tests, backtest), `docs/DEVIATIONS.md` | Sentence parsed in 0.07 s; backtest over 1,061 transactions in 0.42 s; overlap with R04 reported at Jaccard 1.0 |
+| Team and pilot readiness | `docs/PILOT_PLAN.md`, overview audit-readiness score, queue SLA clocks | Readiness 80/100 on a fresh run; SLA due dates on every exception from the versioned UAE calendar |
+
